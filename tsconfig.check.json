@@ -1,0 +1,16 @@
+{
+  // Typecheck-only config covering EVERYTHING, including dashboard/.
+  //
+  // The main tsconfig.json is a BUILD config: rootDir is ./src so compiled output
+  // lands cleanly in ./dist, which means it can only include src/**. That left
+  // dashboard/server.ts and dashboard/logic.ts completely unchecked — a call to a
+  // method that no longer existed shipped without tsc saying a word.
+  //
+  // This config emits nothing and simply checks the whole tree.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["src/**/*", "dashboard/**/*"]
+}

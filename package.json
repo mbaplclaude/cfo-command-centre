@@ -1,0 +1,45 @@
+{
+  "name": "cfo-command-centre",
+  "version": "1.0.0",
+  "description": "CFO Command Centre Agent for task follow-up, Gmail matching, status classification, and reminder drafting",
+  "main": "dist/agent.js",
+  "scripts": {
+    "build": "tsc",
+    "agent": "tsx src/agent.ts",
+    "auth:gmail": "tsx src/auth/gmail-auth-setup.ts",
+    "test:read-sheets": "tsx src/scripts/test-read-sheets.ts",
+    "test:read-gmail": "tsx src/scripts/test-read-gmail.ts",
+    "dashboard": "tsx dashboard/server.ts",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "check:dashboard": "tsx dashboard/logic.ts",
+    "check:report-schedule": "tsx src/classifier/report-schedule.ts",
+    "check:relevance": "tsx src/classifier/relevance.ts",
+    "check:directory": "tsx src/db/directory.ts",
+    "sync:directory": "tsx src/scripts/sync-directory.ts",
+    "check:legacy-status": "tsx src/classifier/legacy-status.ts",
+    "check:parse-date": "tsx src/util/parse-date.ts",
+    "check:task-type": "tsx src/util/task-type.ts",
+    "check:timebox": "tsx src/classifier/timebox.test.ts",
+    "check:cadence": "tsx src/classifier/cadence.test.ts",
+    "check:types": "tsc -p tsconfig.check.json",
+    "check": "npm run check:types && npm run check:parse-date && npm run check:task-type && npm run check:timebox && npm run check:cadence && npm run check:report-schedule && npm run check:relevance && npm run check:legacy-status && npm run check:directory && npm run check:dashboard",
+    "cleanup:drafts": "tsx src/scripts/cleanup-drafts.ts",
+    "discard:run": "tsx src/scripts/discard-run.ts",
+    "flag:legacy-status": "tsx src/scripts/flag-legacy-status.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.115.0",
+    "dotenv": "^16.4.7",
+    "googleapis": "^144.0.0",
+    "pg": "^8.13.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.5",
+    "@types/pg": "^8.11.11",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  }
+}

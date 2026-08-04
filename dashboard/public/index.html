@@ -1,0 +1,1414 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>CFO Command Centre</title>
+<style>
+  /* ---------- tokens ---------- */
+  :root {
+    color-scheme: light;
+    --plane:        #f6f7f8;
+    --surface:      #ffffff;
+    --surface-2:    #fafbfb;
+    --ink:          #14181f;
+    --ink-2:        #565d6b;
+    --ink-muted:    #8a919e;
+    --hairline:     #e5e7eb;
+    --border-strong:#d7dade;
+    --accent:       #2563eb;
+    --accent-wash:  #eaf1fe;
+    --good:         #16a34a;
+    --good-wash:    #eafaf0;
+    --warning:      #d97706;
+    --warning-wash: #fdf3e6;
+    --serious:      #c2410c;
+    --serious-wash: #fdece0;
+    --critical:     #dc2626;
+    --critical-wash:#fdeceb;
+    --wash:         rgba(20,24,31,0.035);
+    --shadow-sm: 0 1px 2px rgba(20,24,31,0.05);
+    --shadow-md: 0 4px 16px rgba(20,24,31,0.08);
+    --shadow-lg: 0 16px 48px rgba(20,24,31,0.18);
+    --radius: 10px;
+    --sans: -apple-system, "Segoe UI", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --plane: #0e1013; --surface: #16181c; --surface-2: #1b1e23; --ink: #f2f3f5;
+      --ink-2: #a8adb8; --ink-muted: #74798a; --hairline: #262a31; --border-strong: #33373f;
+      --accent: #5b9bf7; --accent-wash: #16233a;
+      --good: #34c26b; --good-wash: #12271a;
+      --warning: #eab04a; --warning-wash: #2c2211;
+      --serious: #e08a4d; --serious-wash: #2c1e11;
+      --critical: #ef5a56; --critical-wash: #2c1614;
+      --wash: rgba(255,255,255,0.05);
+      --shadow-sm: 0 1px 2px rgba(0,0,0,0.3); --shadow-md: 0 4px 16px rgba(0,0,0,0.4); --shadow-lg: 0 16px 48px rgba(0,0,0,0.55);
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --plane: #0e1013; --surface: #16181c; --surface-2: #1b1e23; --ink: #f2f3f5;
+    --ink-2: #a8adb8; --ink-muted: #74798a; --hairline: #262a31; --border-strong: #33373f;
+    --accent: #5b9bf7; --accent-wash: #16233a;
+    --good: #34c26b; --good-wash: #12271a;
+    --warning: #eab04a; --warning-wash: #2c2211;
+    --serious: #e08a4d; --serious-wash: #2c1e11;
+    --critical: #ef5a56; --critical-wash: #2c1614;
+    --wash: rgba(255,255,255,0.05);
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.3); --shadow-md: 0 4px 16px rgba(0,0,0,0.4); --shadow-lg: 0 16px 48px rgba(0,0,0,0.55);
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--plane); color: var(--ink); font-family: var(--sans); font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
+  h1, h2, h3 { font-family: var(--sans); font-weight: 650; margin: 0; letter-spacing: -0.015em; }
+  a { color: var(--accent); }
+  button { font: inherit; cursor: pointer; }
+
+  /* ---------- top nav ---------- */
+  .ccc-topnav { background: var(--surface); border-bottom: 1px solid var(--hairline); position: sticky; top: 0; z-index: 40; }
+  .ccc-topnav-inner { max-width: 1180px; margin: 0 auto; padding: 12px 24px; display: flex; align-items: center; gap: 20px; }
+  .ccc-brand { display: flex; align-items: center; gap: 9px; font-size: 15px; font-weight: 650; letter-spacing: -0.01em; white-space: nowrap; }
+  .ccc-brand .ccc-mark { width: 24px; height: 24px; border-radius: 7px; background: var(--ink); color: var(--plane); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; flex: none; }
+  .ccc-search { flex: 1; max-width: 420px; position: relative; }
+  .ccc-search input { width: 100%; font: inherit; font-size: 13px; padding: 8px 12px 8px 32px; border-radius: 8px; border: 1px solid var(--hairline); background: var(--surface-2); color: var(--ink); }
+  .ccc-search input:focus { outline: 2px solid var(--accent); outline-offset: 1px; background: var(--surface); }
+  .ccc-search input::placeholder { color: var(--ink-muted); }
+  .ccc-search-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--ink-muted); font-size: 13px; pointer-events: none; }
+  .ccc-theme-toggle { display: inline-flex; align-items: center; gap: 6px; appearance: none; border: 1px solid var(--hairline); background: var(--surface-2); color: var(--ink-2); padding: 5px 11px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; flex: none; }
+  .ccc-theme-toggle:hover { color: var(--ink); border-color: var(--border-strong); }
+
+  /* ---------- shell ---------- */
+  .ccc-shell { max-width: 1180px; margin: 0 auto; padding: 24px 24px 64px; }
+  .ccc-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-left: auto; }
+  .ccc-chip { font-size: 11.5px; padding: 4px 9px; border-radius: 999px; border: 1px solid var(--hairline); color: var(--ink-2); background: var(--surface-2); display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .ccc-chip b { font-weight: 600; color: var(--ink); }
+  .ccc-dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; }
+
+  /* ---------- tab bar (Linear-style animated underline) ---------- */
+  .ccc-tabbar-wrap { background: var(--surface); border-bottom: 1px solid var(--hairline); position: sticky; top: 49px; z-index: 39; }
+  .ccc-tabs { max-width: 1180px; margin: 0 auto; padding: 0 24px; display: flex; gap: 4px; overflow-x: auto; }
+  .ccc-tab { appearance: none; background: none; border: 0; position: relative; padding: 12px 4px; margin: 0 12px; color: var(--ink-muted); font-size: 13.5px; font-weight: 500; white-space: nowrap; display: inline-flex; align-items: center; gap: 7px; transition: color 0.15s ease; }
+  .ccc-tab:first-child { margin-left: 0; }
+  .ccc-tab:hover { color: var(--ink); }
+  .ccc-tab-icon { font-size: 13px; opacity: 0.85; }
+  .ccc-tab::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--accent); border-radius: 2px 2px 0 0; transform: scaleX(0); transition: transform 0.18s cubic-bezier(.4,0,.2,1); }
+  .ccc-tab[aria-selected="true"] { color: var(--ink); font-weight: 650; }
+  .ccc-tab[aria-selected="true"]::after { transform: scaleX(1); }
+
+  .ccc-panel { margin-top: 24px; }
+  .ccc-pagehead { margin-bottom: 20px; }
+  .ccc-pagehead h1 { font-size: 22px; margin-bottom: 3px; }
+  .ccc-pagehead p { margin: 0; color: var(--ink-2); font-size: 13px; }
+
+  .ccc-card { background: var(--surface); border: 1px solid var(--hairline); border-radius: 12px; box-shadow: var(--shadow-sm); padding: 20px 22px; margin-bottom: 18px; }
+  .ccc-card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+  .ccc-card h2 { font-size: 17px; }
+  .ccc-card h3 { font-size: 15.5px; }
+  .ccc-card header p { margin: 2px 0 0; color: var(--ink-muted); font-size: 12.5px; }
+
+  /* ---------- summary row (KPI cards) ---------- */
+  .ccc-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .ccc-stat { background: var(--surface); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 16px 18px; box-shadow: var(--shadow-sm); }
+  .ccc-stat .ccc-stat-label { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-muted); font-weight: 550; }
+  .ccc-stat .ccc-stat-value { font-size: 30px; font-weight: 650; margin-top: 8px; letter-spacing: -0.02em; line-height: 1; }
+
+  /* ---------- table ---------- */
+  .ccc-scroll { overflow-x: auto; overflow-y: auto; max-height: 68vh; border-radius: 10px; border: 1px solid var(--hairline); }
+  table.ccc-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; background: var(--surface); }
+  .ccc-table th { position: sticky; top: 0; z-index: 5; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-muted); font-weight: 650; padding: 12px 14px; background: var(--surface-2); border-bottom: 1px solid var(--hairline); white-space: nowrap; }
+  .ccc-table td { padding: 14px; border-bottom: 1px solid var(--hairline); vertical-align: top; }
+  .ccc-table tbody tr:last-child td { border-bottom: 0; }
+  .ccc-table tbody tr:nth-child(even) { background: var(--surface-2); }
+  .ccc-table tbody tr { transition: background 0.1s ease; }
+  .ccc-table tbody tr:hover { background: var(--accent-wash); }
+  .ccc-table td.ccc-num, .ccc-table th.ccc-num { text-align: right; font-variant-numeric: tabular-nums; }
+  .ccc-table .ccc-primary { color: var(--ink); font-weight: 550; }
+  .ccc-table .ccc-sub { color: var(--ink-muted); font-size: 12px; margin-top: 1px; }
+  .ccc-empty { padding: 28px 4px; color: var(--ink-2); font-size: 13px; }
+  .ccc-empty code { background: var(--wash); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+
+  /* ---------- badges / status pills: dot + icon + label, never colour alone ---------- */
+  .ccc-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 999px; white-space: nowrap; color: var(--ink); }
+  .ccc-pdot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .ccc-badge .ccc-icon { font-size: 10px; line-height: 1; }
+  .ccc-cat-received  { background: var(--good-wash); color: var(--good); }
+  .ccc-cat-early     { background: var(--good-wash); color: var(--good); }
+  .ccc-cat-unclear   { background: var(--warning-wash); color: var(--warning); }
+  .ccc-cat-overdue   { background: var(--critical-wash); color: var(--critical); }
+  .ccc-cat-pending   { background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--hairline); }
+  .ccc-cat-attention { background: var(--serious-wash); color: var(--serious); }
+  .ccc-badge-PENDING  { background: var(--warning-wash); color: var(--warning); }
+  .ccc-badge-APPROVED { background: var(--good-wash); color: var(--good); }
+  .ccc-badge-EXPIRED  { background: var(--critical-wash); color: var(--critical); }
+  .ccc-badge-RESENT   { background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--hairline); }
+  .ccc-badge-SENT     { background: var(--accent-wash); color: var(--accent); }
+  .ccc-badge-DRAFTED  { background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--hairline); }
+  .ccc-badge-SKIPPED  { background: var(--serious-wash); color: var(--serious); }
+
+  /* ---------- stacked stat bar (Employee Monitor "mix") ---------- */
+  .ccc-bar { display: flex; gap: 2px; height: 8px; min-width: 120px; border-radius: 4px; overflow: hidden; }
+  .ccc-bar span { height: 100%; }
+  .ccc-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--ink-2); }
+  .ccc-legend span { display: inline-flex; align-items: center; gap: 6px; }
+
+  /* ---------- forms ---------- */
+  .ccc-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; }
+  .ccc-field { display: flex; flex-direction: column; gap: 6px; }
+  .ccc-field label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-muted); font-weight: 650; }
+  .ccc-field input, .ccc-field select { font: inherit; font-size: 13.5px; padding: 9px 11px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--ink); width: 100%; }
+  .ccc-field input:focus, .ccc-field select:focus { outline: 2px solid var(--accent); outline-offset: 1px; background: var(--surface); }
+  .ccc-field .ccc-error { color: var(--critical); font-size: 12px; font-weight: 500; }
+  .ccc-hint { color: var(--ink-muted); font-size: 11.5px; min-height: 1em; }
+  .ccc-hint-good { color: var(--good); font-weight: 500; }
+
+  /* Assignee dropdown. Exactly 7 rows are visible; the rest are reached by
+     scrolling inside the list, never by the list growing. Row height is fixed so
+     "7 rows" is a real measurement rather than an approximation. */
+  .ccc-dd-wrap { position: relative; }
+  .ccc-dd {
+    --ccc-dd-row: 38px;
+    position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 30;
+    background: var(--surface); border: 1px solid var(--hairline); border-radius: 10px;
+    box-shadow: var(--shadow-lg);
+    max-height: calc(7 * var(--ccc-dd-row));
+    overflow-y: auto; overscroll-behavior: contain;
+  }
+  .ccc-dd[hidden] { display: none; }
+  .ccc-dd-opt {
+    height: var(--ccc-dd-row); box-sizing: border-box;
+    display: flex; align-items: center; gap: 8px; padding: 0 12px;
+    cursor: pointer; font-size: 13px; border-bottom: 1px solid var(--hairline);
+  }
+  .ccc-dd-opt:last-child { border-bottom: 0; }
+  .ccc-dd-opt:hover, .ccc-dd-opt.ccc-dd-active { background: var(--accent-wash); }
+  .ccc-dd-name { color: var(--ink); font-weight: 550; white-space: nowrap; }
+  .ccc-dd-email { color: var(--ink-muted); font-size: 11.5px; margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ccc-dd-empty { padding: 12px; color: var(--ink-2); font-size: 12.5px; }
+
+  .ccc-checkcell { width: 28px; text-align: center; }
+
+  .ccc-tasktype-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
+  .ccc-tasktype-select { font: inherit; font-size: 12px; padding: 4px 8px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--ink-2); }
+  .ccc-tasktype-select:disabled { opacity: 0.6; }
+
+  .ccc-modal-backdrop { position: fixed; inset: 0; background: rgba(15,17,21,0.5); backdrop-filter: blur(1px); z-index: 100; display: flex; align-items: flex-start; justify-content: center; padding: 6vh 16px; overflow-y: auto; }
+  .ccc-modal { background: var(--surface); border-radius: 14px; padding: 26px 28px 22px; width: 100%; max-width: 620px; box-shadow: var(--shadow-lg); }
+  .ccc-modal-wide { max-width: 780px; }
+  .ccc-modal h2 { font-size: 18px; margin-bottom: 6px; }
+  .ccc-preview-item { border: 1px solid var(--hairline); border-radius: 10px; padding: 14px 16px; margin: 14px 0; background: var(--surface-2); }
+  .ccc-preview-head { font-size: 13px; margin-bottom: 10px; }
+  .ccc-field-label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-muted); font-weight: 650; margin: 10px 0 4px; }
+  .ccc-preview-subject { width: 100%; font: inherit; font-size: 13.5px; padding: 9px 11px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--ink); box-sizing: border-box; }
+  .ccc-preview-body { width: 100%; font: inherit; font-size: 12.5px; padding: 9px 11px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--ink); box-sizing: border-box; resize: vertical; }
+  .ccc-field[data-invalid="true"] input { border-color: var(--critical); }
+  .ccc-actions { display: flex; align-items: center; gap: 12px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--hairline); flex-wrap: wrap; }
+  .ccc-btn { display: inline-flex; align-items: center; gap: 6px; appearance: none; border: 1px solid var(--border-strong); background: var(--ink); color: var(--plane); padding: 8px 15px; border-radius: 8px; font-size: 13px; font-weight: 600; box-shadow: var(--shadow-sm); transition: opacity 0.12s ease; }
+  .ccc-btn:hover:not(:disabled) { opacity: 0.88; }
+  .ccc-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .ccc-btn-ghost { background: var(--surface); color: var(--ink); }
+  .ccc-note { font-size: 12.5px; color: var(--ink-2); }
+  .ccc-note-good { color: var(--good); font-weight: 600; }
+  .ccc-note-bad { color: var(--critical); font-weight: 600; }
+  .ccc-action-cell { min-width: 150px; }
+  .ccc-action-cell .ccc-note { display: inline-block; max-width: 260px; font-weight: 500; }
+  .ccc-card-muted { opacity: 0.85; }
+  .ccc-card-muted .ccc-table { font-size: 12.5px; }
+
+  .ccc-warn { display: flex; gap: 9px; align-items: flex-start; background: var(--serious-wash); border: 1px solid var(--serious); border-radius: 8px; padding: 10px 13px; font-size: 12.5px; color: var(--ink); margin-bottom: 16px; }
+  .ccc-expand { appearance: none; background: none; border: 0; color: var(--accent); padding: 0; font-size: 12.5px; font-weight: 600; }
+  .ccc-expand:hover { text-decoration: underline; }
+  .ccc-detail { background: var(--wash); border-radius: 8px; padding: 12px 14px; font-size: 12.5px; color: var(--ink-2); margin-top: 8px; white-space: pre-wrap; line-height: 1.7; }
+  .ccc-detail b { color: var(--ink); }
+  .ccc-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; word-break: break-all; }
+  .ccc-link:hover { text-decoration-thickness: 2px; }
+  .ccc-attach { display: inline-flex; align-items: center; gap: 4px; margin: 2px 6px 2px 0; padding: 3px 9px; border-radius: 6px; border: 1px solid var(--hairline); background: var(--surface); color: var(--accent); font-size: 12px; text-decoration: none; }
+  .ccc-attach:hover { background: var(--wash); text-decoration: underline; }
+  .ccc-mail-sent   { background: var(--accent-wash); color: var(--accent); }
+  .ccc-mail-draft  { background: var(--warning-wash); color: var(--warning); }
+  .ccc-mail-failed { background: var(--critical-wash); color: var(--critical); }
+  .ccc-mail-none   { background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--hairline); }
+  .ccc-chronic { color: var(--critical); font-weight: 600; }
+  .ccc-subtabs { display: flex; gap: 8px; margin-bottom: 16px; }
+  .ccc-subtab { appearance: none; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 999px; padding: 6px 14px; font-size: 12.5px; color: var(--ink-2); font-weight: 550; }
+  .ccc-subtab[aria-selected="true"] { background: var(--ink); color: var(--plane); border-color: var(--ink); font-weight: 650; }
+</style>
+</head>
+<body>
+<div class="ccc-topnav">
+  <div class="ccc-topnav-inner">
+    <div class="ccc-brand"><span class="ccc-mark">CC</span> CFO Command Centre</div>
+    <div class="ccc-search">
+      <span class="ccc-search-icon">⌕</span>
+      <input type="text" placeholder="Search tasks, employees, threads…" />
+    </div>
+    <div class="ccc-meta" id="ccc-health"></div>
+    <button class="ccc-theme-toggle" id="ccc-theme-toggle" type="button">🌙 Dark mode</button>
+  </div>
+</div>
+<div class="ccc-tabbar-wrap">
+  <nav class="ccc-tabs" role="tablist" id="ccc-tabs"></nav>
+</div>
+<div class="ccc-shell">
+  <main class="ccc-panel" id="ccc-panel"></main>
+</div>
+<div id="ccc-modal-root"></div>
+
+<script type="module">
+// ---------------------------------------------------------------------------
+// Category meta — colour + icon + label so identity is never colour-alone.
+// ---------------------------------------------------------------------------
+const CATEGORY_META = {
+  received:  { label: 'Received',    icon: '✓', cls: 'ccc-cat-received',  colour: 'var(--good)' },
+  early:     { label: 'Early',       icon: '⇧', cls: 'ccc-cat-early',     colour: 'var(--good)' },
+  unclear:   { label: 'Unclear',     icon: '▲', cls: 'ccc-cat-unclear',   colour: 'var(--warning)' },
+  overdue:   { label: 'Overdue',     icon: '✕', cls: 'ccc-cat-overdue',   colour: 'var(--critical)' },
+  pending:   { label: 'Pending',     icon: '○', cls: 'ccc-cat-pending',   colour: 'var(--ink-muted)' },
+  attention: { label: 'Needs data',  icon: '⚑', cls: 'ccc-cat-attention', colour: 'var(--serious)' },
+};
+const STATUS_META = {
+  PENDING:  { icon: '○', colour: 'var(--warning)' },
+  APPROVED: { icon: '✓', colour: 'var(--good)' },
+  EXPIRED:  { icon: '✕', colour: 'var(--critical)' },
+  RESENT:   { icon: '↻', colour: 'var(--ink-muted)' },
+  SENT:     { icon: '✓', colour: 'var(--accent)' },
+  DRAFTED:  { icon: '○', colour: 'var(--ink-muted)' },
+  SKIPPED:  { icon: '⚑', colour: 'var(--serious)' },
+};
+
+const TABS = [
+  { id: 'staff',     label: 'Staff Tracker',    icon: '📋' },
+  { id: 'report',    label: 'Report Calendar',  icon: '🗓' },
+  { id: 'directory', label: 'Directory',        icon: '👥' },
+  { id: 'monitor',   label: 'Employee Monitor', icon: '📈' },
+];
+
+const state = {
+  tab: 'staff',
+  monitorView: 'stats',
+  expanded: null,
+  health: null,
+  data: {},       // per-tab payloads
+  loading: false,
+  error: null,
+  formErrors: {},
+  formNote: null,
+  approving: {},  // runId -> 'busy' | message
+  showExpiredApprovals: false, // collapsed by default so dead runs don't bury active ones
+  taskTypeOptions: [],   // from GET /api/task-types — single canonical list
+  taskTypeEditing: {},   // "tab|rowIndex" -> 'busy' | { ok, message } while an edit is in flight
+  // Manual Staff Tracker send flow (Report Calendar is unaffected — that tab
+  // keeps the automated draft/approve/send pipeline exactly as before).
+  staffSend: {
+    selected: new Set(),   // rowIndex -> selected for preview
+    previews: null,        // [{rowIndex, subject, body, ...}] once fetched, editable in place
+    skipped: [],           // rows that couldn't be previewed, with why
+    sending: false,
+    result: null,          // { sentCount, failedCount, results } after send
+  },
+};
+
+// --- utils -----------------------------------------------------------------
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const el = document.getElementById.bind(document);
+
+// --- theme toggle ------------------------------------------------------------
+// Manual override on top of the OS preference. Only writes an explicit
+// data-theme (and localStorage entry) once the user actually toggles — until
+// then the page keeps following the OS setting via the existing media query.
+const THEME_KEY = 'ccc-theme';
+
+function effectiveTheme() {
+  const explicit = document.documentElement.getAttribute('data-theme');
+  if (explicit === 'light' || explicit === 'dark') return explicit;
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function setThemeToggleLabel(theme) {
+  const btn = el('ccc-theme-toggle');
+  if (btn) btn.textContent = theme === 'dark' ? '☀️ Light mode' : '🌙 Dark mode';
+}
+
+const storedTheme = localStorage.getItem(THEME_KEY);
+if (storedTheme === 'light' || storedTheme === 'dark') {
+  document.documentElement.setAttribute('data-theme', storedTheme);
+}
+setThemeToggleLabel(effectiveTheme());
+
+el('ccc-theme-toggle').addEventListener('click', () => {
+  const next = effectiveTheme() === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem(THEME_KEY, next);
+  setThemeToggleLabel(next);
+});
+
+async function api(path, options) {
+  const res = await fetch(path, {
+    ...options,
+    headers: options?.body ? { 'Content-Type': 'application/json' } : undefined,
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(body.error || `Request failed (${res.status})`), { body, status: res.status });
+  return body;
+}
+
+function badge(cat) {
+  const m = CATEGORY_META[cat] || CATEGORY_META.pending;
+  return `<span class="ccc-badge ${m.cls}"><span class="ccc-pdot" style="background:${m.colour}"></span><span class="ccc-icon">${m.icon}</span>${esc(m.label)}</span>`;
+}
+function statusBadge(status) {
+  const s = String(status || '').toUpperCase();
+  const m = STATUS_META[s] || { icon: '○', colour: 'var(--ink-muted)' };
+  return `<span class="ccc-badge ccc-badge-${esc(s)}"><span class="ccc-pdot" style="background:${m.colour}"></span><span class="ccc-icon">${m.icon}</span>${esc(s)}</span>`;
+}
+function fmtDate(v) {
+  if (!v) return '—';
+  const d = new Date(v);
+  return isNaN(d) ? esc(v) : d.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+}
+function warnBox(msg) {
+  return msg ? `<div class="ccc-warn"><span style="color:var(--serious)">⚑</span><span>${esc(msg)}</span></div>` : '';
+}
+
+const GMAIL_THREAD_BASE = 'https://mail.google.com/mail/u/0/#all/';
+
+// "Sent" means Gmail returned a message id for a real dispatch. A draft sitting
+// in the mailbox awaiting approval is explicitly NOT sent.
+const MAIL_META = {
+  sent:          { label: 'Sent',          icon: '✓', cls: 'ccc-mail-sent',   colour: 'var(--accent)' },
+  draft_pending: { label: 'Draft pending', icon: '○', cls: 'ccc-mail-draft',  colour: 'var(--warning)' },
+  failed:        { label: 'Send failed',   icon: '✕', cls: 'ccc-mail-failed', colour: 'var(--critical)' },
+  none:          { label: 'Not sent',      icon: '–', cls: 'ccc-mail-none',   colour: 'var(--ink-muted)' },
+};
+
+function mailCell(mail) {
+  if (!mail) return `<span class="ccc-badge ccc-mail-none"><span class="ccc-pdot" style="background:var(--ink-muted)"></span><span class="ccc-icon">–</span>Not sent</span>`;
+  const meta = MAIL_META[mail.status] || MAIL_META.none;
+
+  const parts = [`<span class="ccc-badge ${meta.cls}"><span class="ccc-pdot" style="background:${meta.colour}"></span><span class="ccc-icon">${meta.icon}</span>${esc(meta.label)}</span>`];
+
+  if (mail.status === 'sent') {
+    parts.push(`<div class="ccc-sub">${fmtDate(mail.lastSentAt)}</div>`);
+    if (mail.messageId) {
+      // Link straight to the sent message — proof, not just a claim.
+      parts.push(
+        `<div class="ccc-sub">${threadLink(mail.messageId, `id ${String(mail.messageId).slice(0, 10)}…`)}</div>`
+      );
+    }
+    if (mail.sentCount > 1) parts.push(`<div class="ccc-sub">${mail.sentCount} sent total</div>`);
+  } else if (mail.status === 'draft_pending') {
+    parts.push(`<div class="ccc-sub">${mail.draftedCount} draft(s) awaiting approval</div>`);
+  } else if (mail.status === 'failed') {
+    parts.push(`<div class="ccc-sub ccc-note-bad">${esc((mail.lastError || 'unknown error').slice(0, 60))}</div>`);
+  }
+
+  if (mail.chronicallyOverdue) {
+    parts.push(`<div class="ccc-sub ccc-chronic">🚩 chronically overdue — manual escalation</div>`);
+  }
+
+  return parts.join('');
+}
+
+/** Clickable Gmail thread link. */
+function threadLink(threadId, label) {
+  if (!threadId) return '';
+  return `<a class="ccc-link" href="${GMAIL_THREAD_BASE}${encodeURIComponent(threadId)}" target="_blank" rel="noopener noreferrer">${esc(label || 'Open in Gmail')} ↗</a>`;
+}
+
+/** Local calendar date as YYYY-MM-DD (not UTC — toISOString() shifts the day). */
+function todayISO() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function fmtBytes(n) {
+  const b = Number(n) || 0;
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`;
+  return `${(b / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Attachment download links, proxied through the API (Gmail needs auth). */
+function attachmentLinks(attachments) {
+  if (!attachments || attachments.length === 0) return '';
+  return attachments
+    .map(a => {
+      const q = `messageId=${encodeURIComponent(a.messageId)}&attachmentId=${encodeURIComponent(a.attachmentId)}&filename=${encodeURIComponent(a.filename)}`;
+      return `<a class="ccc-attach" href="/api/attachment?${q}" title="${esc(a.mimeType || '')} · ${fmtBytes(a.sizeBytes)}">📎 ${esc(a.filename)}</a>`;
+    })
+    .join(' ');
+}
+
+/**
+ * Turn bare URLs inside Sheet-sourced text into real links. Remarks written by
+ * the previous system embed Gmail URLs as plain text.
+ */
+function linkifyText(text) {
+  const safe = esc(text || '');
+  return safe.replace(/https?:\/\/[^\s<]+/g, url =>
+    `<a class="ccc-link" href="${url}" target="_blank" rel="noopener noreferrer">${url.length > 48 ? url.slice(0, 45) + '…' : url}</a>`
+  );
+}
+
+// --- data loading ----------------------------------------------------------
+async function load(tab, { refresh = false } = {}) {
+  state.loading = true; state.error = null; render();
+  try {
+    if (tab === 'staff' || tab === 'report') {
+      const q = tab === 'report' ? 'Report Calendar' : 'Staff Tracker';
+      // The Directory comes along for the ride: the Add a Task form autofills
+      // Email ID from it, so it has to be loaded before the form is rendered.
+      const [tasks, attention, directory] = await Promise.all([
+        api(`/api/tasks?tab=${encodeURIComponent(q)}${refresh ? '&refresh=1' : ''}`),
+        api('/api/needs-attention'),
+        api('/api/directory').catch(() => ({ employees: [] })),
+      ]);
+      state.data[tab] = { tasks: tasks.tasks, tab: tasks.tab, attention: attention.rows };
+      state.data.directory = directory;
+    } else if (tab === 'directory') {
+      state.data.directory = await api('/api/directory');
+    } else if (tab === 'monitor') {
+      const [stats, logs, approvals] = await Promise.all([
+        api('/api/stats'), api('/api/reminder-logs'), api('/api/approvals'),
+      ]);
+      state.data.monitor = { ...stats, logs: logs.logs, logWarning: logs.dbWarning, approvals: approvals.approvals, approvalWarning: approvals.dbWarning };
+    }
+  } catch (err) {
+    state.error = err.message;
+  } finally {
+    state.loading = false; render();
+  }
+}
+
+// --- views -----------------------------------------------------------------
+function taskView(tabId) {
+  const d = state.data[tabId];
+  if (!d) return '';
+  const tasks = d.tasks || [];
+  const attention = (d.attention || []).filter(r => r.tabName === d.tab);
+  const counts = tasks.reduce((acc, t) => ({ ...acc, [t.category]: (acc[t.category] || 0) + 1 }), {});
+  const isReport = tabId === 'report';
+  const dirCount = directoryEntries().length;
+
+  const summary = ['overdue', 'pending', 'received', 'early', 'unclear'].map(k => `
+    <div class="ccc-stat">
+      <div class="ccc-stat-label"><span class="ccc-dot" style="background:${CATEGORY_META[k].colour}"></span>${esc(CATEGORY_META[k].label)}</div>
+      <div class="ccc-stat-value">${counts[k] || 0}</div>
+    </div>`).join('');
+
+  // Manual send is Staff Tracker only (Report Calendar keeps the automated
+  // scheduled pipeline). Only overdue rows are selectable — the same category
+  // already computed everywhere else — so a reminder is never drafted for a
+  // task that isn't due yet or is already Received.
+  const canSelect = !isReport;
+  const selectedCount = canSelect ? tasks.filter(t => state.staffSend.selected.has(t.rowIndex)).length : 0;
+
+  const rows = tasks.map(t => {
+    const open = state.expanded === `${t.tabName}:${t.rowIndex}`;
+    const selectable = canSelect && t.category === 'overdue';
+    const checked = selectable && state.staffSend.selected.has(t.rowIndex);
+    return `
+      <tr>
+        ${canSelect ? `<td class="ccc-checkcell">${selectable ? `<input type="checkbox" data-staff-select="${t.rowIndex}" ${checked ? 'checked' : ''} />` : ''}</td>` : ''}
+        <td class="ccc-num">${t.rowIndex}${sheetLabel(t.idNum)}</td>
+        <td>
+          <div class="ccc-primary">${esc(t.taskDescription || '(untitled)')}</div>
+          ${taskTypeEditor(t)}
+          ${t.remarks || t.threadId || t.submission ? `<button class="ccc-expand" data-expand="${esc(t.tabName)}:${t.rowIndex}">${open ? 'Hide' : 'Show'} agent detail</button>` : ''}
+          ${open ? agentDetail(t) : ''}
+          ${!open && t.submission?.attachments?.length ? `<div class="ccc-sub">${attachmentLinks(t.submission.attachments)}</div>` : ''}
+        </td>
+        <td>
+          <div class="ccc-primary">${esc(t.assignedTo || '—')}</div>
+          <div class="ccc-sub">${esc(t.emailId)}</div>
+        </td>
+        <td>${isReport ? esc(t.dueDate || '—') : `${esc(t.dateAssigned || '—')}<div class="ccc-sub">due ${esc(t.dueDate || '—')}</div>`}</td>
+        <td>${badge(t.category)}<div class="ccc-sub">${esc(t.status || 'Pending')}</div></td>
+        <td>${mailCell(t.mail)}</td>
+        <td class="ccc-num">${esc(t.days || '—')}</td>
+      </tr>`;
+  }).join('');
+
+  return `
+    <div class="ccc-pagehead">
+      <h1>${esc(d.tab)}</h1>
+      <p>Live from the Google Sheet — ${tasks.length} row${tasks.length === 1 ? '' : 's'} passing the safety filter.${canSelect ? ' Overdue rows can be selected below to send a reminder by hand — this tab is not part of the hourly scheduled run.' : ' This tab is part of the automated hourly reminder run.'}</p>
+    </div>
+
+    <div class="ccc-summary">${summary}</div>
+
+    <section class="ccc-card">
+      <header>
+        <div>
+          <h3>${isReport ? 'Report list' : 'Task list'}</h3>
+        </div>
+        <div style="display:flex; gap:8px; align-items:center;">
+          ${selectedCount > 0 ? `<button class="ccc-btn" data-staff-preview>✉ Send (${selectedCount})</button>` : ''}
+          <button class="ccc-btn ccc-btn-ghost" data-refresh="${tabId}">↻ Refresh Sheet</button>
+        </div>
+      </header>
+      <div class="ccc-scroll">
+        ${tasks.length ? `<table class="ccc-table">
+          <thead><tr>
+            ${canSelect ? `<th></th>` : ''}
+            <th class="ccc-num" title="Physical row number in the Google Sheet">Sheet row</th><th>${isReport ? 'Report' : 'Task'}</th><th>${isReport ? 'Source' : 'Assigned to'}</th>
+            <th>${isReport ? 'Review timing' : 'Assigned / due'}</th><th>Status</th><th>Mail sent</th><th class="ccc-num">${isReport ? 'Overdue' : 'Days'}</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>` : `<div class="ccc-empty">No valid rows on this tab yet. Add one below, or check that the service account can read the Sheet.</div>`}
+      </div>
+    </section>
+
+    ${attention.length ? `<section class="ccc-card">
+      <header><div>
+        <h3>Needs attention — ${attention.length} row${attention.length === 1 ? '' : 's'} excluded</h3>
+        <p>These rows are never emailed. Fix the flagged field in the Sheet to bring them into the pipeline.</p>
+      </div></header>
+      <div class="ccc-scroll"><table class="ccc-table">
+        <thead><tr><th class="ccc-num" title="Physical row number in the Google Sheet">Sheet row</th><th>Task</th><th>Email</th><th>Issue</th></tr></thead>
+        <tbody>${attention.map(r => `<tr>
+          <td class="ccc-num">${r.rowIndex}${sheetLabel(r.idNum)}</td>
+          <td class="ccc-primary">${esc(r.taskDescription || '(untitled)')}</td>
+          <td>${esc(r.emailId || '(missing)')}</td>
+          <td>${badge('attention')}<div class="ccc-sub">${esc(r.validationIssue)}</div></td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+    </section>` : ''}
+
+    <section class="ccc-card">
+      <header><div>
+        <h3>Add a task</h3>
+        <p>Writes a new row directly to <b>${esc(d.tab)}</b>. Status, Remarks, Days and Thread ID are left blank for the agent to fill.</p>
+      </div></header>
+      <form class="ccc-form" data-form="task" data-tab="${tabId}">
+        ${field('taskDescription', isReport ? 'Report name' : 'Task description', 'text', true)}
+        ${field(
+          'assignedTo',
+          isReport ? 'Source / who sends' : 'Assigned to',
+          'text',
+          false,
+          { dropdown: true, hint: dirCount ? `${dirCount} name(s) in Directory — click to browse, Email ID fills in automatically` : 'Directory is empty — run npm run sync:directory to enable autofill' }
+        )}
+        ${field('emailId', 'Email ID', 'email', true)}
+        ${field('taskType', 'Task type', 'select')}
+        ${isReport ? field('dueDate', 'Review timing', 'text') : field('dateAssigned', 'Date assigned', 'date', true) + field('dueDate', 'Due date', 'date')}
+      </form>
+      <div class="ccc-actions">
+        <button class="ccc-btn" data-submit="task" data-tab="${tabId}">＋ Add to Sheet</button>
+        <span class="ccc-note">${state.formNote ? `<span class="${state.formNote.ok ? 'ccc-note-good' : 'ccc-note-bad'}">${esc(state.formNote.text)}</span>` : `The agent's own mailbox address is rejected as an assignee.`}</span>
+      </div>
+    </section>`;
+}
+
+/** Expanded per-row detail: remarks, clickable thread link, attachment links. */
+function agentDetail(t) {
+  const sub = t.submission;
+  const thread = sub?.threadId || t.threadId;
+  const rows = [];
+
+  // Lead with the identity every other view uses, so a row can be cross-referenced
+  // without wondering which "number" is being shown.
+  rows.push(
+    `<b>Sheet row:</b> ${t.rowIndex} in "${esc(t.tabName)}"` +
+      (String(t.idNum ?? '').trim() ? ` <span class="ccc-sub">(sheet "#" label: ${esc(t.idNum)})</span>` : '')
+  );
+  rows.push(`<b>Remarks:</b> ${t.remarks ? linkifyText(t.remarks) : '—'}`);
+
+  if (sub) {
+    rows.push(`<b>Matched email:</b> ${esc(sub.subject || '(no subject)')} — ${fmtDate(sub.dateReceived)}`);
+    rows.push(
+      sub.attachments?.length
+        ? `<b>Attachments:</b> ${attachmentLinks(sub.attachments)}`
+        : `<b>Attachments:</b> none on the matched email`
+    );
+  }
+
+  if (thread) {
+    rows.push(`<b>Gmail thread:</b> ${threadLink(thread, 'Open thread')} <span class="ccc-sub">${esc(thread)}</span>`);
+  }
+
+  return `<div class="ccc-detail">${rows.join('<br>')}</div>`;
+}
+
+function field(name, label, type = 'text', required = false, opts = {}) {
+  const err = state.formErrors[name];
+  if (type === 'select') {
+    // Sourced from GET /api/task-types (src/util/task-type.ts) — one canonical
+    // list, not a second copy hardcoded here that could drift from the backend.
+    const options = state.taskTypeOptions || [];
+    return `<div class="ccc-field"><label for="f-${name}">${esc(label)}</label>
+      <select id="f-${name}" name="${name}">
+        <option value="">—</option>
+        ${options.map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}
+      </select></div>`;
+  }
+  // Date Assigned defaults to today — it is almost always "now", and a blank
+  // required field is the most common reason the Add Task form fails validation.
+  const defaultValue = type === 'date' && name === 'dateAssigned' ? ` value="${todayISO()}"` : '';
+  // autocomplete="off" suppresses the browser's own saved-value popup, which
+  // would otherwise appear on top of our dropdown.
+  const noAuto = opts.dropdown ? ' autocomplete="off"' : '';
+  const combo = opts.dropdown
+    ? ` role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="ccc-dd-list"`
+    : '';
+  const input = `<input id="f-${name}" name="${name}" type="${type}"${defaultValue}${noAuto}${combo} ${required ? 'required' : ''} />`;
+
+  return `<div class="ccc-field" data-invalid="${Boolean(err)}">
+    <label for="f-${name}">${esc(label)}${required ? ' *' : ''}</label>
+    ${opts.dropdown
+      ? `<div class="ccc-dd-wrap">${input}<div class="ccc-dd" id="ccc-dd-list" role="listbox" hidden></div></div>`
+      : input}
+    ${err ? `<span class="ccc-error">${esc(err)}</span>` : ''}
+    <span class="ccc-hint" data-hint-for="${name}">${opts.hint ? esc(opts.hint) : ''}</span>
+  </div>`;
+}
+
+/**
+ * Every view identifies a row by its PHYSICAL sheet row number.
+ *
+ * The sheet's own "#" column is a hand-typed label that drifts out of step with
+ * the physical row (the tabs open with a title block, so "#14" is physical row
+ * 19). Mixing the two made "row 14" mean two different tasks depending on which
+ * table you were reading. The "#" label is still shown, but only ever as a
+ * clearly-marked secondary value — never as the row's identity.
+ */
+function sheetLabel(idNum) {
+  const label = String(idNum ?? '').trim();
+  return label ? `<div class="ccc-sub" title="The sheet's own '#' column — a manual label, not the row number">#${esc(label)}</div>` : '';
+}
+
+/**
+ * Inline Task Type editor for one row. The current value is always offered as
+ * an option even if it isn't in the canonical list (blank, or old free text
+ * already on the Sheet) — rendering the field must never itself change data.
+ */
+function taskTypeEditor(t) {
+  const key = `${t.tabName}|${t.rowIndex}`;
+  const busy = state.taskTypeEditing[key] === 'busy';
+  const result = typeof state.taskTypeEditing[key] === 'object' ? state.taskTypeEditing[key] : null;
+
+  const current = t.taskType || '';
+  const known = state.taskTypeOptions || [];
+  const options = known.includes(current) || !current ? known : [current, ...known];
+
+  const select = `<select class="ccc-tasktype-select" data-tasktype-select="${esc(t.tabName)}|${t.rowIndex}" ${busy ? 'disabled' : ''}>
+    <option value="" ${current ? '' : 'selected'}>— unspecified —</option>
+    ${options.map(o => `<option value="${esc(o)}" ${o === current ? 'selected' : ''}>${esc(o)}</option>`).join('')}
+  </select>`;
+
+  const feedback = busy
+    ? `<span class="ccc-sub">Saving…</span>`
+    : result
+      ? `<span class="ccc-sub ${result.ok ? 'ccc-note-good' : 'ccc-note-bad'}">${esc(result.message)}</span>`
+      : '';
+
+  return `<div class="ccc-tasktype-row">${select}${feedback}</div>`;
+}
+
+/** Directory entries as {name, email}, newest lookup source for autofill. */
+function directoryEntries() {
+  return (state.data.directory?.employees || []).filter(e => e.name && e.email);
+}
+
+/**
+ * Exact, case-insensitive, whitespace-trimmed name match against the Directory.
+ * Deliberately exact: a prefix match would rewrite the email out from under
+ * someone halfway through typing a different colleague's name.
+ */
+function findDirectoryByName(typedName) {
+  const needle = (typedName || '').trim().toLowerCase();
+  if (!needle) return null;
+  return directoryEntries().find(e => e.name.trim().toLowerCase() === needle) || null;
+}
+
+function directoryView() {
+  const d = state.data.directory;
+  if (!d) return '';
+  const rows = (d.employees || []).map(e => `<tr>
+    <td class="ccc-primary">${esc(e.name)}</td>
+    <td>${esc(e.email)}</td>
+    <td>${esc(e.department || '—')}</td>
+    <td class="ccc-sub">${fmtDate(e.created_at)}</td>
+  </tr>`).join('');
+
+  return `
+    <div class="ccc-pagehead">
+      <h1>Directory</h1>
+      <p>${(d.employees || []).length} employee record${(d.employees || []).length === 1 ? '' : 's'} in Postgres.</p>
+    </div>
+    ${warnBox(d.dbWarning)}
+    <section class="ccc-card">
+      <header><div>
+        <h3>Employees</h3>
+      </div></header>
+      <div class="ccc-scroll">
+        ${rows ? `<table class="ccc-table"><thead><tr><th>Name</th><th>Email</th><th>Department</th><th>Added</th></tr></thead><tbody>${rows}</tbody></table>`
+               : `<div class="ccc-empty">No employees yet.${d.dbWarning ? '' : ' Add one below.'}</div>`}
+      </div>
+    </section>
+    <section class="ccc-card">
+      <header><div><h3>Add to directory</h3><p>Upserts on email — re-adding an existing address updates the name.</p></div></header>
+      <form class="ccc-form" data-form="directory">
+        ${field('name', 'Name', 'text', true)}
+        ${field('email', 'Email', 'email', true)}
+        ${field('department', 'Department', 'text')}
+      </form>
+      <div class="ccc-actions">
+        <button class="ccc-btn" data-submit="directory">＋ Add employee</button>
+        ${state.formNote ? `<span class="ccc-note ${state.formNote.ok ? 'ccc-note-good' : 'ccc-note-bad'}">${esc(state.formNote.text)}</span>` : ''}
+      </div>
+    </section>`;
+}
+
+function monitorView() {
+  const d = state.data.monitor;
+  if (!d) return '';
+  const stats = d.stats || [];
+  const max = Math.max(1, ...stats.map(s => s.totalTasks));
+
+  const pagehead = `<div class="ccc-pagehead">
+    <h1>Employee Monitor</h1>
+    <p>Performance, approvals, and dispatch history across both tabs.</p>
+  </div>`;
+
+  const subtabs = `<div class="ccc-subtabs">
+    ${[['stats', 'Performance'], ['approvals', `Approval requests${(d.approvals || []).length ? ` (${d.approvals.length})` : ''}`], ['logs', 'Reminder log']]
+      .map(([id, label]) => `<button class="ccc-subtab" role="tab" aria-selected="${state.monitorView === id}" data-subtab="${id}">${esc(label)}</button>`).join('')}
+  </div>`;
+
+  if (state.monitorView === 'approvals') {
+    // "Dead" covers both ways a run stops being actionable: the DB already marked
+    // it EXPIRED (e.g. via npm run discard:run), or it's still PENDING in the DB
+    // but its approval window has simply passed — the backend only flips that
+    // row's status the next time something touches it. Both need the same
+    // explanatory treatment, not a button that merely looks disabled.
+    const withExpiry = (d.approvals || []).map(a => ({
+      ...a,
+      isDead: a.status === 'EXPIRED' || (a.status === 'PENDING' && new Date(a.expires_at) < new Date()),
+    }));
+    const active = withExpiry.filter(a => !a.isDead);
+    const dead = withExpiry.filter(a => a.isDead);
+
+    const rowHtml = a => {
+      const busy = state.approving[a.run_id];
+      const canApprove = a.status === 'PENDING' && !a.isDead && busy !== 'busy';
+      const actionCell = a.isDead
+        ? `<span class="ccc-note ccc-note-bad">Expired — no longer actionable. Re-run the pipeline to generate fresh reminders for these rows.</span>`
+        : a.status === 'PENDING'
+          ? `<button class="ccc-btn" data-approve="${esc(a.run_id)}" ${canApprove ? '' : 'disabled'}>${busy === 'busy' ? 'Sending…' : '✓ Approve &amp; send'}</button>`
+          : '—';
+      return `<tr>
+        <td><span class="ccc-primary" style="font-variant-numeric:tabular-nums">${esc(a.run_id)}</span>
+            <div class="ccc-sub">${a.reminder_count} reminder${a.reminder_count === 1 ? '' : 's'}</div></td>
+        <td>${statusBadge(a.isDead ? 'EXPIRED' : a.status)}</td>
+        <td class="ccc-sub">${fmtDate(a.created_at)}</td>
+        <td class="ccc-sub">${fmtDate(a.expires_at)}${a.isDead && a.status === 'PENDING' ? '<div class="ccc-note-bad">window closed</div>' : ''}</td>
+        <td class="ccc-action-cell">
+          ${actionCell}
+          ${busy && busy !== 'busy' ? `<div class="ccc-sub">${esc(busy)}</div>` : ''}
+        </td>
+      </tr>`;
+    };
+
+    const activeRows = active.map(rowHtml).join('');
+    const deadRows = dead.map(rowHtml).join('');
+    const tableHead = `<thead><tr><th>Run ID</th><th>Status</th><th>Created</th><th>Expires</th><th>Action</th></tr></thead>`;
+
+    return `${pagehead}${subtabs}
+      ${warnBox(d.approvalWarning)}
+      <section class="ccc-card">
+        <header><div>
+          <h3>Approval requests</h3>
+          <p>Approving dispatches the drafted reminders through the same code path as <code>npm run agent -- --approve</code>. Window: ${state.health?.approvalTimeoutHours ?? 4}h.</p>
+        </div></header>
+        <div class="ccc-scroll">
+          ${activeRows ? `<table class="ccc-table">${tableHead}<tbody>${activeRows}</tbody></table>`
+                       : `<div class="ccc-empty">No active approval requests. One appears here after a pipeline run finds overdue tasks — <code>npm run agent</code>.</div>`}
+        </div>
+      </section>
+
+      ${dead.length ? `<section class="ccc-card ccc-card-muted">
+        <header><div>
+          <button class="ccc-expand" data-toggle-expired>${state.showExpiredApprovals ? 'Hide' : 'Show'} expired (${dead.length})</button>
+          <p>Past their approval window. Kept for the audit trail — not deleted automatically.</p>
+        </div></header>
+        ${state.showExpiredApprovals ? `<div class="ccc-scroll"><table class="ccc-table">${tableHead}<tbody>${deadRows}</tbody></table></div>` : ''}
+      </section>` : ''}`;
+  }
+
+  if (state.monitorView === 'logs') {
+    const rows = (d.logs || []).map(l => `<tr>
+      <td class="ccc-sub">${fmtDate(l.sent_at)}</td>
+      <td class="ccc-primary">${esc(l.recipient_email)}</td>
+      <td class="ccc-num">${l.row_index ?? '—'}</td>
+      <td>${esc(l.task_description || '—')}${l.tab_name ? `<div class="ccc-sub">${esc(l.tab_name)}</div>` : ''}</td>
+      <td class="ccc-sub">${esc(l.reminder_type)}</td>
+      <td>${statusBadge(l.status)}${l.status === 'SENT' && l.message_id ? `<div class="ccc-sub">id ${esc(String(l.message_id).slice(0, 12))}…</div>` : ''}${l.status === 'FAILED' && l.error_text ? `<div class="ccc-sub ccc-note-bad">${esc(String(l.error_text).slice(0, 50))}</div>` : ''}</td>
+    </tr>`).join('');
+    return `${pagehead}${subtabs}
+      ${warnBox(d.logWarning)}
+      <section class="ccc-card">
+        <header><div><h3>Reminder log</h3><p>Most recent 200 dispatches.</p></div></header>
+        <div class="ccc-scroll">
+          ${rows ? `<table class="ccc-table"><thead><tr><th>Sent</th><th>Recipient</th><th class="ccc-num" title="Physical row number in the Google Sheet">Sheet row</th><th>Task</th><th>Type</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table>`
+                 : `<div class="ccc-empty">No reminders dispatched yet.</div>`}
+        </div>
+      </section>`;
+  }
+
+  const rows = stats.map(s => {
+    const seg = (n, colour, label) => n > 0 ? `<span style="background:${colour};flex:${n}" title="${esc(label)}: ${n}"></span>` : '';
+    const untracked = s.totalTasks - s.onTimeCount - s.lateCount - s.overdueCount;
+    return `<tr>
+      <td><div class="ccc-primary">${esc(s.name)}</div><div class="ccc-sub">${esc(s.email)}</div></td>
+      <td style="min-width:150px">
+        <div class="ccc-bar" style="width:${Math.round((s.totalTasks / max) * 100)}%">
+          ${seg(s.onTimeCount, 'var(--good)', 'On time')}
+          ${seg(s.lateCount, 'var(--serious)', 'Late')}
+          ${seg(s.overdueCount, 'var(--critical)', 'Overdue')}
+          ${seg(untracked > 0 ? untracked : 0, 'var(--hairline)', 'Pending')}
+        </div>
+      </td>
+      <td class="ccc-num">${s.totalTasks}</td>
+      <td class="ccc-num">${s.onTimeCount}</td>
+      <td class="ccc-num">${s.lateCount}</td>
+      <td class="ccc-num">${s.overdueCount}</td>
+      <td class="ccc-num">${s.remindersSent}</td>
+    </tr>`;
+  }).join('');
+
+  return `${pagehead}${subtabs}
+    ${warnBox(d.dbWarning)}
+    <section class="ccc-card">
+      <header>
+        <div><h3>Per-employee performance</h3><p>Derived from live Sheet statuses across both tabs; reminders sent from the log table.</p></div>
+        <div class="ccc-legend">
+          <span><span class="ccc-dot" style="background:var(--good)"></span>On time</span>
+          <span><span class="ccc-dot" style="background:var(--serious)"></span>Late</span>
+          <span><span class="ccc-dot" style="background:var(--critical)"></span>Overdue</span>
+          <span><span class="ccc-dot" style="background:var(--hairline)"></span>Pending</span>
+        </div>
+      </header>
+      <div class="ccc-scroll">
+        ${rows ? `<table class="ccc-table"><thead><tr>
+            <th>Employee</th><th>Mix</th><th class="ccc-num">Tasks</th><th class="ccc-num">On time</th>
+            <th class="ccc-num">Late</th><th class="ccc-num">Overdue</th><th class="ccc-num">Reminders</th>
+          </tr></thead><tbody>${rows}</tbody></table>`
+               : `<div class="ccc-empty">No employee metrics yet — they are computed from Sheet rows that pass the safety filter.</div>`}
+      </div>
+    </section>`;
+}
+
+// --- render ----------------------------------------------------------------
+function healthBar() {
+  const h = state.health;
+  if (!h) return '';
+  const chip = (ok, label) => `<span class="ccc-chip"><span class="ccc-dot" style="background:${ok ? 'var(--good)' : 'var(--critical)'}"></span>${esc(label)}</span>`;
+  return [
+    chip(h.serviceAccount, 'Sheet'),
+    chip(h.gmail, 'Gmail'),
+    chip(h.database, 'Database'),
+    `<span class="ccc-chip">Approval <b>${h.requireApproval ? 'required' : 'off'}</b></span>`,
+  ].join('');
+}
+
+function render() {
+  el('ccc-health').innerHTML = healthBar();
+  el('ccc-tabs').innerHTML = TABS.map(t =>
+    `<button class="ccc-tab" role="tab" aria-selected="${state.tab === t.id}" data-tab="${t.id}"><span class="ccc-tab-icon">${t.icon}</span>${esc(t.label)}</button>`).join('');
+
+  let body;
+  if (state.error) body = `<section class="ccc-card"><h2>Could not load</h2><p class="ccc-note ccc-note-bad">${esc(state.error)}</p>
+    <p class="ccc-note">Task views read the Google Sheet directly — check that <code>service-account.json</code> exists and the Sheet is shared with it.</p></section>`;
+  else if (state.loading && !state.data[state.tab]) body = `<section class="ccc-card"><div class="ccc-empty">Loading…</div></section>`;
+  else if (state.tab === 'directory') body = directoryView();
+  else if (state.tab === 'monitor') body = monitorView();
+  else body = taskView(state.tab);
+
+  el('ccc-panel').innerHTML = body;
+  // The panel was just rebuilt, so the dropdown element is new and hidden.
+  // Leaving ddOpen true would desync the state from the DOM.
+  ddOpen = false;
+  ddIndex = -1;
+  ddItems = [];
+
+  renderStaffSendModal();
+}
+
+/**
+ * Staff Tracker manual-send preview/edit/confirm modal.
+ *
+ * Rendered into a fixed overlay root outside the tab panel, so switching tabs
+ * behind it (there's no reason to, but nothing stops it) doesn't tear it down
+ * mid-review. Only visible once previews have been fetched.
+ */
+function renderStaffSendModal() {
+  const root = el('ccc-modal-root');
+  const s = state.staffSend;
+
+  if (!s.previews) { root.innerHTML = ''; return; }
+
+  if (s.result) {
+    const { sentCount, failedCount, results } = s.result;
+    root.innerHTML = `
+      <div class="ccc-modal-backdrop">
+        <div class="ccc-modal">
+          <h2>${failedCount === 0 ? '✅ Sent' : '⚠️ Sent with errors'}</h2>
+          <p>${sentCount} sent, ${failedCount} failed.</p>
+          <div class="ccc-scroll" style="max-height:40vh">
+            <table class="ccc-table"><thead><tr><th>Recipient</th><th>Rows</th><th>Result</th></tr></thead><tbody>
+              ${results.map(r => `<tr><td>${esc(r.recipientEmail || '')}</td><td class="ccc-sub">${(r.rowIndexes || []).join(', ')}</td><td>${r.sent ? `<span class="ccc-note-good">Sent</span> <span class="ccc-sub">id ${esc(String(r.messageId || '').slice(0, 12))}…</span>` : `<span class="ccc-note-bad">Failed: ${esc(r.error || 'unknown error')}</span>`}</td></tr>`).join('')}
+            </tbody></table>
+          </div>
+          <div class="ccc-actions"><button class="ccc-btn" data-staff-close>Done</button></div>
+        </div>
+      </div>`;
+    return;
+  }
+
+  const items = s.previews;
+  root.innerHTML = `
+    <div class="ccc-modal-backdrop">
+      <div class="ccc-modal ccc-modal-wide">
+        <h2>Review before sending</h2>
+        <p class="ccc-note">Sending here calls Gmail directly — there is no draft step and no separate approval. Review (and edit if needed) each email below, then confirm.</p>
+        ${s.skipped.length ? `<div class="ccc-warn"><span>⚑</span><span>${s.skipped.length} row(s) skipped: ${s.skipped.map(x => `row ${x.rowIndex} (${esc(x.reason)})`).join('; ')}</span></div>` : ''}
+        <div class="ccc-scroll" style="max-height:55vh">
+          ${items.map((p, i) => `
+            <div class="ccc-preview-item">
+              <div class="ccc-preview-head">
+                <b>${esc(p.recipientName || p.recipientEmail)}</b>
+                <span class="ccc-sub">${esc(p.recipientEmail)} · ONE email covering ${p.items.length} item(s)</span>
+                <div class="ccc-sub">${p.items.map(i => `row ${i.rowIndex}: ${esc(i.taskDescription)} (${i.overdueDays}d)`).join(' · ')}</div>
+              </div>
+              <label class="ccc-field-label">Subject</label>
+              <input class="ccc-preview-subject" data-preview-subject="${i}" value="${esc(p.subject)}" />
+              <label class="ccc-field-label">Body</label>
+              <textarea class="ccc-preview-body" data-preview-body="${i}" rows="7">${esc(p.body)}</textarea>
+            </div>
+          `).join('')}
+        </div>
+        <div class="ccc-actions">
+          <button class="ccc-btn" data-staff-confirm ${s.sending ? 'disabled' : ''}>${s.sending ? 'Sending…' : `✉ Send all as shown (${items.length})`}</button>
+          <button class="ccc-btn ccc-btn-ghost" data-staff-cancel ${s.sending ? 'disabled' : ''}>Cancel</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+// --- Directory autofill ----------------------------------------------------
+// Once the user edits Email ID by hand, autofill stops overwriting it. Without
+// this, correcting the email and then touching the name would silently revert it.
+let emailManuallyEdited = false;
+
+function setHint(fieldName, text, good) {
+  const el = document.querySelector(`[data-hint-for="${fieldName}"]`);
+  if (!el) return;
+  el.textContent = text;
+  el.className = `ccc-hint${good ? ' ccc-hint-good' : ''}`;
+}
+
+/**
+ * The one autofill path. Typing and picking from the dropdown both call this, so
+ * the matching rules cannot drift apart between the two entry points.
+ */
+function applyDirectoryAutofill(form, typedValue) {
+  const emailInput = form.querySelector('[name="emailId"]');
+  if (!emailInput) return;
+
+  const match = findDirectoryByName(typedValue);
+
+  if (match) {
+    // Fill unless the user has taken over the field, or already typed something
+    // different that isn't a previous autofill.
+    if (!emailManuallyEdited) {
+      emailInput.value = match.email;
+      setHint('assignedTo', `Email ID auto-filled from Directory (${match.email}) — you can overwrite it`, true);
+      // Clear any stale "email required" error styling now that it is populated.
+      emailInput.closest('.ccc-field')?.setAttribute('data-invalid', 'false');
+    } else {
+      setHint('assignedTo', `${match.name} is in the Directory as ${match.email} — keeping the email you entered`, false);
+    }
+    return;
+  }
+
+  // No match: never clear what is already there. A half-typed name matching
+  // nothing is the normal case, not an error.
+  const dirCount = directoryEntries().length;
+  setHint(
+    'assignedTo',
+    (typedValue || '').trim()
+      ? 'No Directory match — enter the Email ID manually'
+      : dirCount
+        ? `${dirCount} name(s) in Directory — click to browse, Email ID fills in automatically`
+        : 'Directory is empty — run npm run sync:directory to enable autofill',
+    false
+  );
+}
+
+// --- Assignee dropdown -----------------------------------------------------
+// Deliberately opens on click/focus only. Reopening on every keystroke is what
+// made the previous list feel intrusive, so once it is dismissed (Escape, a
+// selection, or a click elsewhere) typing filters nothing back into view.
+let ddOpen = false;
+let ddIndex = -1;
+let ddItems = [];
+let ddSuppressOpen = false;
+
+const ddList = () => document.getElementById('ccc-dd-list');
+const ddInput = () => document.querySelector('[data-form="task"] [name="assignedTo"]');
+
+function ddFilter(text) {
+  const needle = (text || '').trim().toLowerCase();
+  const all = directoryEntries();
+  if (!needle) return all;
+  return all.filter(e => e.name.toLowerCase().includes(needle) || e.email.toLowerCase().includes(needle));
+}
+
+function ddRender(filterText) {
+  const list = ddList();
+  if (!list) return;
+
+  ddItems = ddFilter(filterText);
+  ddIndex = -1;
+
+  if (ddItems.length === 0) {
+    list.innerHTML = `<div class="ccc-dd-empty">No Directory name matches “${esc((filterText || '').trim())}” — type the Email ID manually.</div>`;
+    return;
+  }
+
+  list.innerHTML = ddItems
+    .map(
+      (e, i) =>
+        `<div class="ccc-dd-opt" role="option" aria-selected="false" data-dd-index="${i}">
+           <span class="ccc-dd-name">${esc(e.name)}</span>
+           <span class="ccc-dd-email">${esc(e.email)}</span>
+         </div>`
+    )
+    .join('');
+}
+
+function ddSetOpen(open, filterText) {
+  const list = ddList();
+  const input = ddInput();
+  if (!list || !input) return;
+
+  ddOpen = open;
+  input.setAttribute('aria-expanded', String(open));
+
+  if (open) {
+    ddRender(filterText ?? input.value);
+    list.hidden = false;
+    list.scrollTop = 0;
+  } else {
+    list.hidden = true;
+    ddIndex = -1;
+  }
+}
+
+function ddHighlight(nextIndex) {
+  const list = ddList();
+  if (!list || ddItems.length === 0) return;
+
+  // Wrap around, so ArrowUp from the top lands on the last entry.
+  ddIndex = (nextIndex + ddItems.length) % ddItems.length;
+
+  list.querySelectorAll('.ccc-dd-opt').forEach((opt, i) => {
+    const active = i === ddIndex;
+    opt.classList.toggle('ccc-dd-active', active);
+    opt.setAttribute('aria-selected', String(active));
+    // 'nearest' keeps the 7-row viewport steady instead of recentring on each move.
+    if (active) opt.scrollIntoView({ block: 'nearest' });
+  });
+}
+
+function ddSelect(entry) {
+  const input = ddInput();
+  const form = input?.closest('[data-form="task"]');
+  if (!input || !form || !entry) return;
+
+  input.value = entry.name;
+  applyDirectoryAutofill(form, entry.name); // exact-match logic, unchanged
+  ddSetOpen(false);
+
+  // Return focus for continued typing, without the focusin handler taking that
+  // as a fresh click and reopening the list we just closed.
+  if (document.activeElement !== input) {
+    ddSuppressOpen = true;
+    input.focus();
+    ddSuppressOpen = false;
+  }
+}
+
+document.addEventListener('input', ev => {
+  const input = ev.target;
+  if (!input.name) return;
+  const form = input.closest('[data-form="task"]');
+  if (!form) return;
+
+  // Typing directly into Email ID hands control to the user for good.
+  if (input.name === 'emailId') {
+    emailManuallyEdited = true;
+    return;
+  }
+
+  if (input.name !== 'assignedTo') return;
+
+  applyDirectoryAutofill(form, input.value);
+  // Filter live, but only while the list is already showing — never force it open.
+  if (ddOpen) ddRender(input.value);
+});
+
+// Open on click or focus (mouse and keyboard both land here).
+document.addEventListener('focusin', ev => {
+  if (ddSuppressOpen) return; // re-focusing after a selection must not reopen it
+  if (ev.target.name === 'assignedTo' && ev.target.closest('[data-form="task"]')) ddSetOpen(true);
+});
+
+document.addEventListener('mousedown', ev => {
+  // Selecting an option: mousedown beats the input's blur, so the click is never lost.
+  const opt = ev.target.closest('.ccc-dd-opt');
+  if (opt) {
+    ev.preventDefault();
+    ddSelect(ddItems[Number(opt.dataset.ddIndex)]);
+    return;
+  }
+  if (ev.target.closest('[data-form="task"] [name="assignedTo"]')) {
+    ddSetOpen(true);
+    return;
+  }
+  // Anywhere else — including inside the list's scrollbar area — dismisses it.
+  if (ddOpen && !ev.target.closest('#ccc-dd-list')) ddSetOpen(false);
+});
+
+document.addEventListener('keydown', ev => {
+  const input = ev.target;
+  if (input.name !== 'assignedTo' || !input.closest('[data-form="task"]')) return;
+
+  if (ev.key === 'ArrowDown') {
+    ev.preventDefault();
+    if (!ddOpen) return ddSetOpen(true);
+    ddHighlight(ddIndex + 1);
+  } else if (ev.key === 'ArrowUp') {
+    ev.preventDefault();
+    if (!ddOpen) return ddSetOpen(true);
+    ddHighlight(ddIndex - 1);
+  } else if (ev.key === 'Enter') {
+    if (ddOpen && ddIndex >= 0) {
+      ev.preventDefault(); // don't submit the form on a selection
+      ddSelect(ddItems[ddIndex]);
+    }
+  } else if (ev.key === 'Escape') {
+    if (ddOpen) {
+      ev.stopPropagation();
+      ddSetOpen(false);
+    }
+  } else if (ev.key === 'Tab') {
+    ddSetOpen(false);
+  }
+});
+
+// --- events ----------------------------------------------------------------
+document.addEventListener('click', async ev => {
+  const t = ev.target.closest(
+    '[data-tab],[data-subtab],[data-expand],[data-refresh],[data-submit],[data-approve],' +
+      '[data-staff-preview],[data-staff-confirm],[data-staff-cancel],[data-staff-close],[data-toggle-expired]'
+  );
+  if (!t) return;
+
+  if (t.dataset.toggleExpired !== undefined) {
+    state.showExpiredApprovals = !state.showExpiredApprovals;
+    return render();
+  }
+
+  if (t.dataset.tab && t.classList.contains('ccc-tab')) {
+    state.tab = t.dataset.tab; state.formErrors = {}; state.formNote = null;
+    emailManuallyEdited = false; // fresh form, autofill active again
+    if (!state.data[state.tab]) return load(state.tab);
+    return render();
+  }
+  if (t.dataset.subtab) { state.monitorView = t.dataset.subtab; return render(); }
+  if (t.dataset.expand) {
+    state.expanded = state.expanded === t.dataset.expand ? null : t.dataset.expand;
+    return render();
+  }
+  if (t.dataset.refresh) return load(t.dataset.refresh, { refresh: true });
+
+  if (t.dataset.submit === 'task') {
+    const form = document.querySelector('[data-form="task"]');
+    const payload = Object.fromEntries(new FormData(form));
+    payload.tab = t.dataset.tab === 'report' ? 'Report Calendar' : 'Staff Tracker';
+    t.disabled = true;
+    try {
+      const res = await api('/api/tasks', { method: 'POST', body: JSON.stringify(payload) });
+      state.formErrors = {};
+      const notifyNote = res.notified ? ' Assignee notified.' : res.notifyError ? ` (Notification failed: ${res.notifyError})` : '';
+      state.formNote = { ok: true, text: `Added to ${res.task.tabName} at row ${res.task.rowIndex}.${notifyNote}${res.dbWarning ? ' (Sheet written; DB mirror skipped.)' : ''}` };
+      emailManuallyEdited = false; // form is cleared on reload; re-arm autofill
+      await load(t.dataset.tab, { refresh: true });
+    } catch (err) {
+      state.formErrors = err.body?.errors || {};
+      state.formNote = { ok: false, text: Object.keys(state.formErrors).length ? 'Fix the highlighted fields.' : err.message };
+      render();
+    }
+    return;
+  }
+
+  if (t.dataset.submit === 'directory') {
+    const form = document.querySelector('[data-form="directory"]');
+    const payload = Object.fromEntries(new FormData(form));
+    t.disabled = true;
+    try {
+      await api('/api/directory', { method: 'POST', body: JSON.stringify(payload) });
+      state.formErrors = {}; state.formNote = { ok: true, text: `Saved ${payload.email}.` };
+      await load('directory');
+    } catch (err) {
+      state.formErrors = err.body?.errors || {};
+      state.formNote = { ok: false, text: Object.keys(state.formErrors).length ? 'Fix the highlighted fields.' : err.message };
+      render();
+    }
+    return;
+  }
+
+  if (t.dataset.approve) {
+    const runId = t.dataset.approve;
+    state.approving[runId] = 'busy'; render();
+    try {
+      const res = await api(`/api/approvals/${encodeURIComponent(runId)}/approve`, { method: 'POST', body: '{}' });
+      state.approving[runId] = res.message;
+    } catch (err) {
+      state.approving[runId] = err.body?.message || err.message;
+    }
+    await load('monitor');
+    return;
+  }
+
+  if (t.dataset.staffPreview !== undefined) {
+    const rowIndexes = [...state.staffSend.selected];
+    t.disabled = true;
+    try {
+      const res = await api('/api/staff-reminders/preview', { method: 'POST', body: JSON.stringify({ rowIndexes }) });
+      state.staffSend.previews = res.previews;
+      state.staffSend.skipped = res.skipped || [];
+      state.staffSend.result = null;
+    } catch (err) {
+      state.staffSend.previews = [];
+      state.staffSend.skipped = [{ rowIndex: 0, reason: err.message }];
+    }
+    render();
+    return;
+  }
+
+  if (t.dataset.staffCancel !== undefined) {
+    state.staffSend.previews = null;
+    state.staffSend.skipped = [];
+    state.staffSend.result = null;
+    render();
+    return;
+  }
+
+  if (t.dataset.staffClose !== undefined) {
+    // Clear the selection too — the sent rows are done; re-select explicitly
+    // for anything still needing attention next time.
+    state.staffSend.selected = new Set();
+    state.staffSend.previews = null;
+    state.staffSend.skipped = [];
+    state.staffSend.result = null;
+    await load('staff', { refresh: true }); // Mail Sent column reflects the new log rows
+    return;
+  }
+
+  if (t.dataset.staffConfirm !== undefined) {
+    state.staffSend.sending = true;
+    render();
+    // One entry per DIGEST (per recipient), carrying every row it covers so the
+    // server can log an occurrence against each of them.
+    const items = state.staffSend.previews.map(p => ({
+      rowIndexes: p.rowIndexes,
+      recipientEmail: p.recipientEmail,
+      subject: p.subject,
+      body: p.body,
+      reminderType: p.reminderType,
+    }));
+    try {
+      const res = await api('/api/staff-reminders/send', { method: 'POST', body: JSON.stringify({ items }) });
+      state.staffSend.result = res;
+    } catch (err) {
+      state.staffSend.result = { sentCount: 0, failedCount: items.length, results: items.map(i => ({ rowIndex: i.rowIndex, sent: false, error: err.message })) };
+    }
+    state.staffSend.sending = false;
+    render();
+    return;
+  }
+});
+
+// Checkbox selection (Staff Tracker rows) and in-place preview editing both use
+// the same delegated `change`/`input` listener — neither needs a full re-render,
+// since editing a textarea while the whole modal re-renders would fight the
+// cursor position.
+document.addEventListener('change', async ev => {
+  const cb = ev.target.closest('[data-staff-select]');
+  if (cb) {
+    const rowIndex = Number(cb.dataset.staffSelect);
+    if (cb.checked) state.staffSend.selected.add(rowIndex);
+    else state.staffSend.selected.delete(rowIndex);
+    render();
+    return;
+  }
+
+  const sel = ev.target.closest('[data-tasktype-select]');
+  if (sel) {
+    const [tabName, rowIndexStr] = sel.dataset.tasktypeSelect.split('|');
+    const rowIndex = Number(rowIndexStr);
+    const key = `${tabName}|${rowIndex}`;
+    const newTaskType = sel.value;
+
+    state.taskTypeEditing[key] = 'busy';
+    render();
+
+    try {
+      const res = await api('/api/tasks/task-type', {
+        method: 'POST',
+        body: JSON.stringify({ tab: tabName, rowIndex, taskType: newTaskType }),
+      });
+      const rv = res.reevaluation || {};
+      const message = rv.attempted
+        ? rv.message
+        : rv.reason
+          ? `Task Type saved. ${rv.reason}`
+          : 'Task Type saved.';
+      state.taskTypeEditing[key] = { ok: true, message };
+      // Re-read from the Sheet so Status/Remarks/category reflect anything the
+      // re-evaluation just wrote back, not only the Task Type cell itself.
+      await load(state.tab, { refresh: true });
+    } catch (err) {
+      // Sheet write failed (or the row vanished) — the select still shows the
+      // OLD value on the next render because the re-read never used the new
+      // one; nothing here writes an unconfirmed value into local state.
+      state.taskTypeEditing[key] = { ok: false, message: `Not saved: ${err.body?.error || err.message}` };
+      render();
+    }
+  }
+});
+
+document.addEventListener('input', ev => {
+  const subjectIdx = ev.target.dataset.previewSubject;
+  const bodyIdx = ev.target.dataset.previewBody;
+  if (subjectIdx !== undefined && state.staffSend.previews) {
+    state.staffSend.previews[Number(subjectIdx)].subject = ev.target.value;
+  } else if (bodyIdx !== undefined && state.staffSend.previews) {
+    state.staffSend.previews[Number(bodyIdx)].body = ev.target.value;
+  }
+  // No render() here — these inputs already reflect the keystroke; re-rendering
+  // the whole modal would rebuild the textarea and jump the cursor to the end.
+});
+
+// --- boot ------------------------------------------------------------------
+state.health = await api('/api/health').catch(() => null);
+state.taskTypeOptions = (await api('/api/task-types').catch(() => ({ options: [] }))).options;
+await load(state.tab);
+</script>
+</body>
+</html>
