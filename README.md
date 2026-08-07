@@ -1,4 +1,4 @@
-# CFO Command Centre Agent (v2)
+# CFO Command Centre Agent 
 
 An automated AI agent for the OGI Finance Office / CFO that reads assigned tasks from Google Sheets, searches Gmail for submissions, deterministically time-boxes and classifies task status, updates Google Sheets, and drafts reminder emails with a human-in-the-loop approval checkpoint before dispatching.
 
@@ -7,7 +7,7 @@ An automated AI agent for the OGI Finance Office / CFO that reads assigned tasks
 ## 📁 Project Workspace Location
 
 Recommended project directory:
-`C:\Users\Hp\.gemini\antigravity\scratch\cfo-command-centre`
+`D:\Ai agents\cfo-command-centre`
 
 ---
 
@@ -40,7 +40,7 @@ Copy `.env.example` to `.env` and configure your credentials:
 
 ```env
 # Google Sheets Configuration
-GOOGLE_SHEET_ID=1blcm4q94bmszP7t-ffLKwOwxUqsQVhHzRJwUOWODFtM
+GOOGLE_SHEET_ID=1blcm4q94bmszP7t-ffLKwOwxUqsQVhHzRJwUOASRFTYIWD
 GOOGLE_SERVICE_ACCOUNT_KEY_PATH=./service-account.json
 
 # Gmail OAuth2 Configuration (Personal Gmail: mbaplclaudereply@gmail.com)
