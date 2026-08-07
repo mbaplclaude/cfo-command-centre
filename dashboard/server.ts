@@ -10,6 +10,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 import { GoogleSheetsClient } from '../src/google/sheets.js';
 import { GmailClient } from '../src/google/gmail.js';
@@ -26,10 +27,46 @@ import { EmployeeStatsAggregator } from '../src/stats/employee-stats.js';
 import { approveAndDispatchRun } from '../src/agent.js';
 import { CONFIG } from '../src/config/index.js';
 import { UnifiedTask } from '../src/types/index.js';
-import { categorize, resolveTab, toDashboardTask, validateNewTask, scalarText, isAllowedTaskType, MAX_TEXT_LENGTH, NewTaskInput } from './logic.js';
+import { categorize, resolveTab, resolveWriteTab, toDashboardTask, validateNewTask, scalarText, isAllowedTaskType, MAX_TEXT_LENGTH, NewTaskInput } from './logic.js';
 
 const PORT = Number(process.env.DASHBOARD_PORT || 4000);
 const HERE = __dirname;
+
+// Every route here can send mail and write the live Sheet with no other auth
+// layer, so once the server binds beyond 127.0.0.1 (Render, any hosted box)
+// HTTP Basic Auth is the only thing standing between this and the open
+// internet. Basic Auth, not a custom header: this is a browser SPA, and
+// browsers natively prompt for + remember + resend Basic credentials (on the
+// page load AND every subsequent fetch to the same origin) with no frontend
+// code needed — a bearer-style header would need the login page it doesn't have.
+//
+// Required unconditionally — no "open if unset" fallback, because that
+// fallback is exactly the state that would be silently, permanently wrong in
+// production.
+const DASHBOARD_USER = process.env.DASHBOARD_USER || '';
+const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || '';
+if (!DASHBOARD_USER || !DASHBOARD_PASSWORD) {
+  console.error('❌ DASHBOARD_USER and DASHBOARD_PASSWORD must both be set. Refusing to start.');
+  process.exit(1);
+}
+
+/** Constant-time compare so response timing can't be used to guess credentials byte-by-byte. */
+function timingSafeStringEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  // Comparing against a same-length buffer when lengths differ, rather than
+  // returning false immediately, keeps the compare itself constant-time —
+  // an early-out on length would leak the real length via timing.
+  return bufA.length === bufB.length && crypto.timingSafeEqual(bufA, bufB);
+}
+
+function isAuthorized(req: http.IncomingMessage): boolean {
+  const header = req.headers.authorization || '';
+  const [scheme, encoded] = header.split(' ');
+  if (scheme !== 'Basic' || !encoded) return false;
+  const [user, password] = Buffer.from(encoded, 'base64').toString('utf8').split(':');
+  return timingSafeStringEqual(user || '', DASHBOARD_USER) && timingSafeStringEqual(password || '', DASHBOARD_PASSWORD);
+}
 
 const sheets = new GoogleSheetsClient();
 const gmail = new GmailClient();
@@ -85,12 +122,36 @@ async function safeQuery(sql: string, params?: any[]): Promise<{ rows: any[]; er
  * needs-attention and stats, which all derive from the same two API calls.
  */
 const SHEET_TTL_MS = 15_000;
-let sheetCache: { at: number; tasks: UnifiedTask[] } | null = null;
+let sheetCache: { at: number; tasks: UnifiedTask[]; sourceErrors: Record<string, string> } | null = null;
 
-async function readSheet(force = false): Promise<UnifiedTask[]> {
-  if (!force && sheetCache && Date.now() - sheetCache.at < SHEET_TTL_MS) return sheetCache.tasks;
+async function readSheet(force = false): Promise<{ tasks: UnifiedTask[]; sourceErrors: Record<string, string> }> {
+  if (!force && sheetCache && Date.now() - sheetCache.at < SHEET_TTL_MS) return sheetCache;
 
-  const [staff, report] = await Promise.all([sheets.readStaffTracker(), sheets.readReportCalendar()]);
+  /** Tab name -> why it could not be read. Reported per tab, never as a blank list. */
+  const sourceErrors: Record<string, string> = {};
+
+  // Every configured report source goes through the SAME reader the pipeline uses
+  // (src/agent.ts), so adding a workbook stays a CONFIG.REPORT_SOURCES edit rather
+  // than a second reader here.
+  //
+  // Each source read is caught individually and NOT with one Promise.all: the MIS
+  // registers live in a second workbook, so a service account that isn't shared on
+  // it (or an unenabled API on that project) would otherwise reject the whole
+  // batch and blank out Staff Tracker and Report Calendar too. Staff Tracker is
+  // deliberately left uncaught — its failure is still a hard error, exactly as before.
+  const [staff, ...reports] = await Promise.all([
+    sheets.readStaffTracker(),
+    ...CONFIG.REPORT_SOURCES.map(source =>
+      sheets.readReportCalendar(source.sheetId, source.tab).catch(err => {
+        sourceErrors[source.tab] = internalError(
+          `Sheet read failed (${source.label}, "${source.tab}" on ${source.sheetId})`,
+          err,
+          `Could not read "${source.tab}" — check the service account has access to that workbook. See the dashboard server log.`
+        );
+        return { rows: [], invalidRows: [] };
+      })
+    ),
+  ]);
 
   const tasks: UnifiedTask[] = [
     ...staff.rows.map(r => ({
@@ -109,28 +170,34 @@ async function readSheet(force = false): Promise<UnifiedTask[]> {
       daysOrOverdueDays: r.days,
       isValid: true,
     })),
-    ...report.rows.map(r => ({
-      tabName: CONFIG.REPORT_CALENDAR_TAB as UnifiedTask['tabName'],
-      rowIndex: r.rowIndex,
-      idNum: r.idNum,
-      taskDescriptionOrName: r.reportName,
-      assignedToName: r.sourceWhoSends,
-      emailId: r.emailId,
-      taskType: r.taskType,
-      dateAssigned: '',
-      dueDate: r.reviewTiming,
-      currentStatus: r.status,
-      remarks: r.remarks,
-      threadId: r.threadId,
-      daysOrOverdueDays: r.overdueDays,
-      isValid: true,
-    })),
+    // Index-matched to CONFIG.REPORT_SOURCES, so each row is tagged with the tab it
+    // actually came from — that tag is the only thing distinguishing an MIS row
+    // from a Report Calendar one downstream.
+    ...reports.flatMap((report, i) =>
+      report.rows.map(r => ({
+        tabName: CONFIG.REPORT_SOURCES[i].tab as UnifiedTask['tabName'],
+        rowIndex: r.rowIndex,
+        idNum: r.idNum,
+        taskDescriptionOrName: r.reportName,
+        assignedToName: r.sourceWhoSends,
+        emailId: r.emailId,
+        taskType: r.taskType,
+        dateAssigned: '',
+        dueDate: r.reviewTiming,
+        currentStatus: r.status,
+        remarks: r.remarks,
+        threadId: r.threadId,
+        daysOrOverdueDays: r.overdueDays,
+        isValid: true,
+      }))
+    ),
     ...staff.invalidRows,
-    ...report.invalidRows,
+    // readReportCalendar already stamps invalidRows with their own tabName.
+    ...reports.flatMap(r => r.invalidRows),
   ];
 
-  sheetCache = { at: Date.now(), tasks };
-  return tasks;
+  sheetCache = { at: Date.now(), tasks, sourceErrors };
+  return sheetCache;
 }
 
 /** A credential still holding an .env.example placeholder is not configured. */
@@ -180,13 +247,23 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
     handler: async () => ({
       body: {
         sheetId: CONFIG.GOOGLE_SHEET_ID,
-        serviceAccount: fs.existsSync(path.resolve(CONFIG.GOOGLE_SERVICE_ACCOUNT_KEY_PATH)),
+        serviceAccount: fs.existsSync(path.resolve(CONFIG.GOOGLE_SERVICE_ACCOUNT_KEY_PATH)) || Boolean(process.env.GOOGLE_SERVICE_ACCOUNT_JSON),
         database: configured(CONFIG.DATABASE_URL),
         gmail: configured(CONFIG.GMAIL_REFRESH_TOKEN),
         anthropic: configured(CONFIG.ANTHROPIC_API_KEY),
         requireApproval: CONFIG.REQUIRE_APPROVAL,
         approvalTimeoutHours: CONFIG.APPROVAL_TIMEOUT_HOURS,
         operatorEmail: CONFIG.OPERATOR_EMAIL,
+        // The MIS Checklist tab's sub-toggle is built from this, so the register
+        // tab names live in CONFIG.REPORT_SOURCES only — the frontend never carries
+        // its own copy that could drift from what the pipeline actually reads.
+        // `requiresConfirmation` travels with them: that flag is exactly what makes
+        // these registers read-only in the UI, so the UI has to be able to see it.
+        misSources: CONFIG.REPORT_SOURCES.filter(s => s.sheetId === CONFIG.MIS_CHECKLIST_SHEET_ID).map(s => ({
+          tab: s.tab,
+          label: s.label,
+          requiresConfirmation: Boolean(s.requiresConfirmation),
+        })),
       },
     }),
   },
@@ -218,7 +295,14 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
     pattern: /^\/api\/tasks\/task-type$/,
     handler: async ({ req }) => {
       const body = await readBody(req);
-      const tabName = resolveTab(body.tab);
+      // resolveWriteTab, NOT resolveTab: this route WRITES a Task Type cell. The
+      // loose resolver would silently guess Report Calendar for a malformed tab
+      // value — combined with a rowIndex that happens to be a real row there,
+      // that would overwrite an unrelated row's Task Type instead of failing.
+      const tabName = resolveWriteTab(body.tab);
+      if (tabName === null) {
+        return { status: 400, body: { error: `"${scalarText(body.tab) || '(blank)'}" is not a recognised tab — nothing was written.` } };
+      }
       const rowIndex = Number(body.rowIndex);
 
       // scalarText, not String(): String({}) is "[object Object]", which this route
@@ -239,6 +323,24 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
         return {
           status: 400,
           body: { error: `"${taskType}" is not a valid Task Type. Allowed: ${TASK_TYPE_OPTIONS.join(', ')}.` },
+        };
+      }
+
+      // A source still carrying `requiresConfirmation` is not trusted for writes
+      // that nobody is watching. The CLI refuses to write one without --i-mean-it,
+      // so this route must not be the quieter way in — and the read below defaults
+      // to the PRIMARY workbook, which for an MIS tab would inspect the wrong sheet
+      // entirely before the write scope caught it.
+      const guarded = CONFIG.REPORT_SOURCES.find(s => s.tab === tabName && s.requiresConfirmation);
+      if (guarded) {
+        return {
+          status: 403,
+          body: {
+            error:
+              `"${guarded.label}" is read-only from the dashboard: it still requires --i-mean-it on the command line ` +
+              `before anything may write to it. Edit the Task Type in the Sheet itself, or clear requiresConfirmation ` +
+              `in CONFIG.REPORT_SOURCES once this source is trusted.`,
+          },
         };
       }
 
@@ -404,16 +506,20 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
     pattern: /^\/api\/tasks$/,
     handler: async ({ url }) => {
       const tabName = resolveTab(url.searchParams.get('tab') || undefined);
-      const all = await readSheet(url.searchParams.get('refresh') === '1');
+      const { tasks: all, sourceErrors } = await readSheet(url.searchParams.get('refresh') === '1');
 
       // Latest recorded submission per row, for the Gmail thread + attachment links.
+      //
+      // starts_with, not LIKE: "_" is a LIKE wildcard, and "MIS_Closing_Report (M)"
+      // is full of them — under LIKE those underscores match ANY character, so one
+      // register's key pattern could pick up another tab's rows.
       const subs = await safeQuery(
         `SELECT DISTINCT ON (task_key)
                 task_key, thread_id, message_id, subject, date_received, attachments_json
            FROM submissions
-          WHERE task_key LIKE $1
+          WHERE starts_with(task_key, $1)
           ORDER BY task_key, date_received DESC`,
-        [`${tabName}|%`]
+        [`${tabName}|`]
       );
       const byKey = new Map<string, any>();
       for (const s of subs.rows) byKey.set(s.task_key, s);
@@ -429,9 +535,9 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
                 (ARRAY_AGG(message_id ORDER BY sent_at DESC) FILTER (WHERE status = 'SENT' AND message_id IS NOT NULL))[1] AS last_message_id,
                 (ARRAY_AGG(error_text ORDER BY sent_at DESC) FILTER (WHERE status = 'FAILED'))[1] AS last_error
            FROM reminder_logs
-          WHERE task_key LIKE $1
+          WHERE starts_with(task_key, $1)
           GROUP BY task_key`,
-        [`${tabName}|%`]
+        [`${tabName}|`]
       );
       const mailByKey = new Map<string, any>();
       for (const m of mail.rows) mailByKey.set(m.task_key, m);
@@ -481,7 +587,16 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
           };
         });
 
-      return { body: { tab: tabName, tasks, dbWarning: subs.error || mail.error } };
+      return {
+        body: {
+          tab: tabName,
+          tasks,
+          dbWarning: subs.error || mail.error,
+          // Only this tab's own read failure — one unreadable workbook must not
+          // put a warning on every other tab's page.
+          sheetWarning: sourceErrors[tabName],
+        },
+      };
     },
   },
 
@@ -490,8 +605,8 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
     method: 'GET',
     pattern: /^\/api\/needs-attention$/,
     handler: async () => {
-      const all = await readSheet();
-      return { body: { rows: all.filter(t => !t.isValid).map(toDashboardTask) } };
+      const { tasks } = await readSheet();
+      return { body: { rows: tasks.filter(t => !t.isValid).map(toDashboardTask) } };
     },
   },
 
@@ -501,13 +616,15 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
     pattern: /^\/api\/tasks$/,
     handler: async ({ req }) => {
       const input: NewTaskInput = await readBody(req);
-      const { ok, errors, clean } = validateNewTask(input);
+      const { ok, errors, clean, tab: tabName } = validateNewTask(input);
       if (!ok) return { status: 400, body: { errors } };
 
-      // Everything below uses `clean`, never `input`: the raw body's fields may be
-      // objects or arrays, and calling .trim() on one was a 500. `clean` is
-      // already coerced, trimmed, length-capped and format-checked.
-      const tabName = resolveTab(input.tab);
+      // Everything below uses `clean`/`tabName` from validateNewTask's own result,
+      // never a second resolveTab(input.tab) call: that used to re-resolve the SAME
+      // raw input independently, via the loose reader-side resolver — meaning what
+      // got validated and what got WRITTEN could, in principle, be two different
+      // tabs. Using the exact tab validateNewTask already resolved (via the strict
+      // resolveWriteTab) guarantees the write targets exactly what was checked.
       const rowIndex = await sheets.appendRow(tabName, {
         taskDescription: clean.taskDescription,
         assignedTo: clean.assignedTo,
@@ -617,7 +734,7 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
     method: 'GET',
     pattern: /^\/api\/stats$/,
     handler: async () => {
-      const all = await readSheet();
+      const { tasks: all } = await readSheet();
       const reminders = await safeQuery(
         `SELECT LOWER(recipient_email) AS email, COUNT(*)::int AS count
          FROM reminder_logs WHERE status = 'SENT' GROUP BY 1`
@@ -625,6 +742,12 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
       const counts: Record<string, number> = {};
       for (const r of reminders.rows) counts[r.email] = r.count;
 
+      // Every valid row from every readable tab — Staff Tracker, Report Calendar,
+      // and both MIS registers — so an employee's totalTasks reflects their real
+      // workload, not just their Report-Calendar-only subset. MIS rows are all
+      // still "Pending" today (nothing has classified them live yet, per the
+      // --i-mean-it guard), so they surface here as real, correctly-uncounted
+      // Pending load — not on-time/late/overdue noise, and not silently dropped.
       const stats = EmployeeStatsAggregator.calculateStats(all, counts);
       stats.sort((a, b) => b.overdueCount - a.overdueCount || b.totalTasks - a.totalTasks);
       return { body: { stats, dbWarning: reminders.error } };
@@ -917,6 +1040,19 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify(body));
   };
 
+  // Gate on Basic Auth before anything else — including the static page, so the
+  // dashboard shell itself isn't served to an unauthenticated caller. The
+  // WWW-Authenticate header is what makes the browser show its native login
+  // prompt instead of a bare 401 page.
+  if (!isAuthorized(req)) {
+    res.writeHead(401, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'WWW-Authenticate': 'Basic realm="CFO Command Centre", charset="UTF-8"',
+    });
+    return res.end(JSON.stringify({ error: 'Unauthorized.' }));
+  }
+
   // Match on path first, then method — several paths carry both a GET and a POST,
   // so a method mismatch on one route must not shadow the sibling that fits.
   const pathMatches = routes
@@ -961,14 +1097,16 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-// 127.0.0.1, not the default all-interfaces bind. These routes can send mail and
-// write the live Sheet with no authentication, so "local only" has to be enforced
-// by the socket rather than left to whatever the host firewall happens to allow.
-server.listen(PORT, '127.0.0.1', () => {
+// All interfaces, not 127.0.0.1: a hosted deployment (Render, etc.) is reached
+// via its container's network interface, not loopback — binding to loopback
+// there makes the service unreachable, not "secure". Basic Auth above is what
+// now enforces access instead; put Render's own IP allowlist / private
+// networking in front of this too where available, defense in depth.
+server.listen(PORT, '0.0.0.0', () => {
   console.log('\n======================================================');
   console.log('📊 CFO COMMAND CENTRE — DASHBOARD');
   console.log('======================================================');
-  console.log(`   Open:     http://localhost:${PORT}`);
+  console.log(`   Open:     http://localhost:${PORT}  (Basic Auth required — DASHBOARD_USER / DASHBOARD_PASSWORD)`);
   console.log(`   Sheet:    ${CONFIG.GOOGLE_SHEET_ID}`);
   console.log(`   Service account key: ${fs.existsSync(path.resolve(CONFIG.GOOGLE_SERVICE_ACCOUNT_KEY_PATH)) ? '✅ found' : '❌ missing (task views will error)'}`);
   console.log(`   Database: ${CONFIG.DATABASE_URL ? 'configured' : '❌ not configured (approvals/directory/logs will be empty)'}`);

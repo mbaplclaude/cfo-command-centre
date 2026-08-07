@@ -14,12 +14,31 @@ import {
 } from './db/reminder-history.js';
 import { parseSheetDate } from './util/parse-date.js';
 import { isMailSuppressed } from './util/task-type.js';
+import { isLegacyStatus } from './classifier/legacy-status.js';
 import { LLMReasoner } from './classifier/llm-reasoner.js';
 import { GmailNotificationChannel } from './channels/gmail-channel.js';
 import { DraftReminderItem } from './channels/interface.js';
 import { EmployeeStatsAggregator } from './stats/employee-stats.js';
 import { CONFIG } from './config/index.js';
 import { UnifiedTask } from './types/index.js';
+
+/**
+ * True when a `requiresConfirmation` source is blocked from every outbound
+ * effect on this run: no Sheet write-back, no Gmail draft, no mention in the
+ * operator-summary email. A dry run is never "blocked" by this — a dry run
+ * already produces zero outbound effects by construction (see the separate
+ * dry-run preview further down), so there is nothing for --i-mean-it to gate.
+ *
+ * ONE function, called from both the Sheet write-back branch and the
+ * digest/draft branch below, so a guarded source cannot end up blocked from
+ * the Sheet cell while still being drafted and emailed — the exact gap that
+ * `--i-mean-it` used to leave open (it stopped the write, not the mail).
+ *
+ * Self-check: npm run check:agent-guard
+ */
+export function isGuardedLive(dryRun: boolean, writeGuarded: boolean): boolean {
+  return !dryRun && writeGuarded;
+}
 
 class CFOAgent {
   private sheetsClient = new GoogleSheetsClient();
@@ -31,8 +50,12 @@ class CFOAgent {
     dryRun?: boolean;
     approveRunId?: string;
     showStatsOnly?: boolean;
-    /** Evaluate ONLY "4. Report Calendar". Used by the hourly scheduled task. */
+    /** Evaluate report tabs only — no Staff Tracker. Used by the hourly scheduled task. */
     reportsOnly?: boolean;
+    /** Restrict to REPORT_SOURCES whose label/tab/sheet id contains this text. */
+    sourceFilter?: string;
+    /** --i-mean-it: required before a live (non-dry-run) write to a `requiresConfirmation` source. */
+    confirmed?: boolean;
   }) {
     console.log('\n======================================================');
     console.log('🤖 CFO COMMAND CENTRE AGENT (v2)');
@@ -53,19 +76,59 @@ class CFOAgent {
 
     console.log('📊 STEP 1: Reading Google Sheet Tabs...');
     if (reportsOnly) {
-      console.log(`   Scope: "${CONFIG.REPORT_CALENDAR_TAB}" only — "${CONFIG.STAFF_TRACKER_TAB}" is excluded from scheduled runs.`);
+      console.log(`   Scope: report tabs only — "${CONFIG.STAFF_TRACKER_TAB}" is excluded from scheduled runs.`);
     }
 
     const staffResult = reportsOnly
       ? { rows: [], invalidRows: [] }
       : await this.sheetsClient.readStaffTracker();
-    const reportResult = await this.sheetsClient.readReportCalendar();
 
-    const allInvalidRows = [...staffResult.invalidRows, ...reportResult.invalidRows];
+    // Every configured (sheet, tab) pair goes through the SAME reader. Sources are
+    // restricted with --source when only one workbook is being looked at.
+    const sources = options.sourceFilter
+      ? CONFIG.REPORT_SOURCES.filter(s =>
+          [s.label, s.tab, s.sheetId].some(v => v.toLowerCase().includes(options.sourceFilter!.toLowerCase()))
+        )
+      : CONFIG.REPORT_SOURCES;
+
+    if (sources.length === 0) {
+      console.error(`❌ --source "${options.sourceFilter}" matched none of: ${CONFIG.REPORT_SOURCES.map(s => s.label).join(', ')}`);
+      return;
+    }
+
+    console.log(`   Report sources in scope: ${sources.map(s => s.label).join(', ')}`);
+
+    // A source flagged requiresConfirmation is not yet trusted for unattended live
+    // runs. On a live run without --i-mean-it, its rows are still read, evaluated
+    // and logged in full, but --i-mean-it gates EVERY outbound effect for that
+    // source, not just the Sheet cell: no Sheet write-back, no Gmail draft, and no
+    // mention of its rows in the operator-summary email (both refusals are applied
+    // per-row further down — see "REFUSED TO WRITE" / "REFUSED TO DRAFT"). A source
+    // without this flag, and any other source in the SAME invocation, is unaffected.
+    const guardedSources = sources.filter(s => s.requiresConfirmation);
+    const writeGuardActive = !options.dryRun && !options.confirmed && guardedSources.length > 0;
+    if (writeGuardActive) {
+      console.log(
+        `\n⛔ LIVE WRITE GUARD: ${guardedSources.map(s => s.label).join(', ')} ` +
+          `require --i-mean-it before this run may act on them for real (not yet trusted for unattended live runs).`
+      );
+      console.log(`   These rows will be evaluated and logged as usual, but nothing will be saved, drafted, or emailed for them.`);
+      console.log(`   Add --i-mean-it to the command line once you're ready to let it act on them for real.`);
+    }
+
+    const reportResults = [];
+    for (const source of sources) {
+      const result = await this.sheetsClient.readReportCalendar(source.sheetId, source.tab);
+      reportResults.push({ source, ...result });
+    }
+
+    const allInvalidRows = [...staffResult.invalidRows, ...reportResults.flatMap(r => r.invalidRows)];
 
     console.log(`✅ Read Completed:`);
     console.log(`   - Staff Tracker valid tasks: ${staffResult.rows.length}`);
-    console.log(`   - Report Calendar valid tasks: ${reportResult.rows.length}`);
+    for (const r of reportResults) {
+      console.log(`   - ${r.source.label} ("${r.source.tab}") valid rows: ${r.rows.length}`);
+    }
     console.log(`   - Invalid / Skipped rows (Safety Filter): ${allInvalidRows.length}`);
 
     if (options.showStatsOnly) {
@@ -86,8 +149,8 @@ class CFOAgent {
           daysOrOverdueDays: r.days,
           isValid: true,
         })),
-        ...reportResult.rows.map(r => ({
-          tabName: '4. Report Calendar' as const,
+        ...reportResults.flatMap(res => res.rows.map(r => ({
+          tabName: res.source.tab,
           rowIndex: r.rowIndex,
           idNum: r.idNum,
           taskDescriptionOrName: r.reportName,
@@ -101,7 +164,7 @@ class CFOAgent {
           threadId: r.threadId,
           daysOrOverdueDays: r.overdueDays,
           isValid: true,
-        })),
+        }))),
       ];
       const stats = EmployeeStatsAggregator.calculateStats(allTasks);
       EmployeeStatsAggregator.printStatsTable(stats);
@@ -136,6 +199,10 @@ class CFOAgent {
       dueDateLabel: string;
       currentStatus: string;
       threadId: string;
+      /** What the Remarks cell already says — compared against, never read as truth. */
+      existingRemarks: string;
+      /** True when this row's source requires --i-mean-it and this run doesn't have it. */
+      writeGuarded: boolean;
       writeBack: (status: string, remarks: string, threadId: string) => Promise<void>;
     }
 
@@ -155,51 +222,63 @@ class CFOAgent {
         dueDateLabel: row.dueDate,
         currentStatus: row.status,
         threadId: row.threadId,
+        existingRemarks: row.remarks,
+        // The primary sheet's Staff Tracker is long-trusted — never guarded.
+        writeGuarded: false,
         writeBack: (status, remarks, threadId) =>
           this.sheetsClient.updateStaffTrackerRow(row.rowIndex, status, remarks, row.days, threadId),
       });
     }
 
-    for (const row of reportResult.rows) {
-      // Report Calendar has no date columns — resolve the current period from
-      // Review Timing + Task Type. No recognised cadence means skip, not guess:
-      // assuming "daily" would email someone every day for a quarterly report.
-      // "No Mail Sent" is an explicit opt-out, not a data problem — report it as
-      // such rather than lumping it in with rows whose cadence is unrecognised.
-      if (isMailSuppressed(row.taskType)) {
-        unscheduledReports.push(
-          `[Row ${row.rowIndex}] "${row.reportName}" — Task Type "${row.taskType}": excluded from all reminder mail by choice`
-        );
-        continue;
-      }
+    // Identical treatment for every report source — the only per-source values are
+    // the sheet id and tab name carried into the reader and the write-back.
+    for (const { source, rows } of reportResults) {
+      for (const row of rows) {
+        // Report rows have no date columns — resolve the current period from
+        // Review Timing + Task Type. No recognised cadence means skip, not guess:
+        // assuming "daily" would email someone every day for a quarterly report.
+        // "No Mail Sent" is an explicit opt-out, not a data problem — report it as
+        // such rather than lumping it in with rows whose cadence is unrecognised.
+        if (isMailSuppressed(row.taskType)) {
+          unscheduledReports.push(
+            `[${source.tab} row ${row.rowIndex}] "${row.reportName}" — Task Type "${row.taskType}": excluded from all reminder mail by choice`
+          );
+          continue;
+        }
 
-      const period = resolveReportPeriod(row.reviewTiming, row.taskType);
-      if (!period) {
-        unscheduledReports.push(
-          `[Row ${row.rowIndex}] "${row.reportName}" — Task Type "${row.taskType || '(blank)'}" has no recognised cadence`
-        );
-        continue;
-      }
+        const period = resolveReportPeriod(row.reviewTiming, row.taskType);
+        if (!period) {
+          unscheduledReports.push(
+            `[${source.tab} row ${row.rowIndex}] "${row.reportName}" — Task Type "${row.taskType || '(blank)'}" has no recognised cadence`
+          );
+          continue;
+        }
 
-      units.push({
-        tabName: CONFIG.REPORT_CALENDAR_TAB,
-        rowIndex: row.rowIndex,
-        taskId: row.idNum || `REPORT-${row.rowIndex}`,
-        title: row.reportName,
-        recipientName: row.sourceWhoSends || row.name,
-        recipientEmail: row.emailId,
-        taskType: row.taskType,
-        windowStart: period.periodStart.toISOString(),
-        dueDate: period.dueDate.toISOString(),
-        dueDateLabel: period.label,
-        currentStatus: row.status,
-        threadId: row.threadId,
-        writeBack: (status, remarks, threadId) =>
-          this.sheetsClient.updateReportCalendarRow(row.rowIndex, status, remarks, row.overdueDays, threadId),
-      });
+        units.push({
+          tabName: source.tab,
+          rowIndex: row.rowIndex,
+          taskId: row.idNum || `REPORT-${row.rowIndex}`,
+          title: row.reportName,
+          recipientName: row.sourceWhoSends || row.name,
+          recipientEmail: row.emailId,
+          taskType: row.taskType,
+          windowStart: period.periodStart.toISOString(),
+          dueDate: period.dueDate.toISOString(),
+          dueDateLabel: period.label,
+          currentStatus: row.status,
+          threadId: row.threadId,
+          existingRemarks: row.remarks,
+          writeGuarded: Boolean(source.requiresConfirmation) && !options.confirmed,
+          writeBack: (status, remarks, threadId) =>
+            this.sheetsClient.updateReportCalendarRow(
+              row.rowIndex, status, remarks, row.overdueDays, threadId, source.sheetId, source.tab
+            ),
+        });
+      }
     }
 
-    console.log(`   Evaluating ${units.length} row(s): ${units.filter(u => u.tabName === CONFIG.STAFF_TRACKER_TAB).length} staff task(s) + ${units.filter(u => u.tabName === CONFIG.REPORT_CALENDAR_TAB).length} report(s).`);
+    const staffUnits = units.filter(u => u.tabName === CONFIG.STAFF_TRACKER_TAB).length;
+    console.log(`   Evaluating ${units.length} row(s): ${staffUnits} staff task(s) + ${units.length - staffUnits} report(s).`);
 
     // Reminder history drives both the per-day throttle and the per-period cap.
     // This THROWS if the database is unreachable — proceeding without it would
@@ -210,6 +289,38 @@ class CFOAgent {
       console.log(`   Reminder history loaded for ${reminderHistory.size} row(s).`);
     }
     const chronicRows: Array<{ tabName: string; rowIndex: number; title: string; recipientEmail: string; overdueDays: number; count: number }> = [];
+    /**
+     * Rows that WOULD have gone into today's digest but come from a
+     * `requiresConfirmation` source on a live run without --i-mean-it.
+     *
+     * unit.writeGuarded already stops the Sheet write-back (see below); this is
+     * its counterpart for the reminder side. Without this list, a guarded source
+     * still reached digestCandidates -> pendingReminders -> real Gmail drafts and
+     * a real operator-summary email — --i-mean-it only ever protected the Sheet
+     * cell, not the two outbound emails an unattended run is actually supposed to
+     * be guarded against.
+     */
+    const guardedDigestSkips: Array<{ tabName: string; rowIndex: number; title: string; recipientEmail: string; overdueDays: number }> = [];
+
+    /**
+     * What this run would do to a cell that is ALREADY populated.
+     *
+     * These sheets were previously driven by a separate Apps Script whose output
+     * looks a lot like this agent's, so "the cell already says Received" is not
+     * evidence that this agent put it there. Every disagreement is collected and
+     * printed at the end of a dry run instead of being written over silently.
+     */
+    const conflicts: Array<{
+      kind: 'STATUS_CHANGE' | 'UNCORROBORATED' | 'THREAD_CHANGE' | 'UNKNOWN_STATUS';
+      tabName: string;
+      rowIndex: number;
+      title: string;
+      recipientEmail: string;
+      existing: string;
+      proposed: string;
+    }> = [];
+    /** Rows whose mailbox could not be searched — their "no submission" means nothing. */
+    const searchFailures: Array<{ rowIndex: number; tabName: string; error: string }> = [];
 
     if (unscheduledReports.length > 0) {
       console.log(`\n   ⏭️  Skipped ${unscheduledReports.length} Report Calendar row(s) with no recognised cadence (never reminded, never guessed):`);
@@ -223,14 +334,58 @@ class CFOAgent {
         console.log(`   └─ Current period due: ${unit.dueDateLabel}`);
       }
 
-      const { classification, selectedReply } = await evaluateRowSubmission(unit, {
+      const { classification, selectedReply, searchFailed, searchError } = await evaluateRowSubmission(unit, {
         gmailClient: this.gmailClient,
         llmReasoner: this.llmReasoner,
       });
 
+      if (searchFailed) searchFailures.push({ rowIndex: unit.rowIndex, tabName: unit.tabName, error: searchError || 'unknown' });
+
+      // --- Compare against whatever is already in the row's cells ------------
+      const noteConflict = (kind: typeof conflicts[number]['kind'], existing: string, proposed: string) =>
+        conflicts.push({
+          kind, tabName: unit.tabName, rowIndex: unit.rowIndex, title: unit.title,
+          recipientEmail: unit.recipientEmail, existing, proposed,
+        });
+      const existingStatus = (unit.currentStatus || '').trim();
+
+      // A Status this agent never writes came from somewhere else entirely.
+      if (isLegacyStatus(existingStatus)) {
+        noteConflict('UNKNOWN_STATUS', `Status "${existingStatus}"`, 'not a status this agent produces');
+      }
+
       if (classification && classification.status !== 'Irrelevant') {
-        // Perform Write-back if not dry-run
-        if (!options.dryRun) {
+        if (existingStatus && existingStatus.toLowerCase() !== classification.status.toLowerCase()) {
+          noteConflict(
+            'STATUS_CHANGE',
+            `${existingStatus}${unit.existingRemarks ? ` — "${unit.existingRemarks.slice(0, 90)}"` : ''}`,
+            `${classification.status} — "${classification.remarks.slice(0, 90)}"`
+          );
+        }
+        const newThread = classification.threadId || '';
+        if (unit.threadId && newThread && unit.threadId !== newThread) {
+          noteConflict('THREAD_CHANGE', `Thread ID ${unit.threadId}`, `Thread ID ${newThread}`);
+        }
+      } else if (/^received/i.test(existingStatus) && !searchFailed) {
+        // The cell claims a submission this run could not find any evidence for.
+        // Only meaningful when the mailbox was actually searched — a failed search
+        // proves nothing, so it must not be dressed up as a contradiction.
+        noteConflict(
+          'UNCORROBORATED',
+          `${existingStatus}${unit.existingRemarks ? ` — "${unit.existingRemarks.slice(0, 110)}"` : ''}`,
+          'no matching reply found in this period — value left untouched, not verified'
+        );
+      }
+
+      if (classification && classification.status !== 'Irrelevant') {
+        // Perform Write-back if not dry-run — and not held back by the live-write
+        // guard on a source that isn't yet trusted for unattended writes.
+        if (isGuardedLive(options.dryRun ?? false, unit.writeGuarded)) {
+          console.warn(
+            `   ⚠️ REFUSED TO WRITE [${unit.tabName} row ${unit.rowIndex}]: this source requires --i-mean-it. ` +
+              `Would have written: ${classification.status} — "${classification.remarks}"`
+          );
+        } else if (!options.dryRun) {
           await unit.writeBack(
             classification.status,
             classification.remarks,
@@ -238,7 +393,9 @@ class CFOAgent {
           );
 
           // Persist the submission so the dashboard can link to the thread and
-          // its attachments — the Sheet has no column for either.
+          // its attachments — the Sheet has no column for either. Skipped above
+          // whenever the write itself was refused, so the DB never claims a
+          // submission the Sheet doesn't actually reflect.
           if (selectedReply) {
             const rec = await recordSubmission(db, {
               tabName: unit.tabName,
@@ -312,6 +469,22 @@ class CFOAgent {
           // One digest per recipient per day. This row already contributed to a
           // digest today, so it must not pull its recipient into a second one.
           console.log(`   └─ Already covered by today's digest — one digest per recipient per day.`);
+        } else if (isGuardedLive(options.dryRun ?? false, unit.writeGuarded)) {
+          // Mirrors the Sheet-write refusal above: --i-mean-it is an all-or-nothing
+          // gate for this source, not a Sheet-only one. A dry run is exempt because
+          // a dry run never drafts or sends anything for ANY source — showing what
+          // this row WOULD have contributed is exactly its job.
+          console.warn(
+            `   ⚠️ REFUSED TO DRAFT [${unit.tabName} row ${unit.rowIndex}]: this source requires --i-mean-it. ` +
+              `Would have added to ${unit.recipientEmail}'s digest (${eligibility.overdueDays} day(s) overdue).`
+          );
+          guardedDigestSkips.push({
+            tabName: unit.tabName,
+            rowIndex: unit.rowIndex,
+            title: unit.title,
+            recipientEmail: unit.recipientEmail,
+            overdueDays: eligibility.overdueDays,
+          });
         } else {
           console.log(`   └─ ⚠️ DUE/OVERDUE (${eligibility.overdueDays} day(s)) — added to ${unit.recipientEmail}'s digest.`);
           digestCandidates.push({
@@ -366,6 +539,62 @@ class CFOAgent {
         console.log(`   - [${r.tabName} row ${r.rowIndex}] "${r.title}" <${r.recipientEmail}> — ${r.overdueDays} days overdue, ${r.count} reminders sent`)
       );
       console.log(`   These need a manual decision rather than another email.`);
+    }
+
+    if (guardedDigestSkips.length > 0) {
+      console.log(
+        `\n⛔ LIVE WRITE GUARD — ${guardedDigestSkips.length} row(s) excluded from drafting AND from the operator-summary ` +
+          `email: these belong to a source that requires --i-mean-it and this run does not have it. Nothing was drafted, ` +
+          `logged as drafted, or emailed for them.`
+      );
+      guardedDigestSkips.forEach(r =>
+        console.log(`   - [${r.tabName} row ${r.rowIndex}] "${r.title}" <${r.recipientEmail}> — ${r.overdueDays} day(s) overdue`)
+      );
+    }
+
+    // A dry run's whole purpose on a sheet that already holds data is this list:
+    // every cell whose current contents this run disagrees with. Printed before the
+    // reminder plan because it is the part that needs a human decision.
+    if (options.dryRun) {
+      // Stated FIRST and unconditionally. A comparison run against an unreachable
+      // mailbox looks identical to one where nobody submitted anything, and the
+      // difference decides whether the output below can be acted on at all.
+      if (searchFailures.length > 0) {
+        const distinct = [...new Set(searchFailures.map(f => f.error))];
+        console.log(
+          `\n⛔ GMAIL SEARCH FAILED for ${searchFailures.length} of ${units.length} row(s): ${distinct.join('; ')}`
+        );
+        if (searchFailures.length === units.length) {
+          console.log(`   NO mailbox was searched, so this run has NO evidence about who submitted what.`);
+          console.log(`   Treat every "no submission" below as UNKNOWN, not as "nothing was sent".`);
+        }
+        if (distinct.some(e => /invalid_grant/i.test(e))) {
+          console.log(`   invalid_grant = the Gmail refresh token is expired or revoked. Fix: npm run auth:gmail`);
+        }
+      }
+
+      const LABEL: Record<typeof conflicts[number]['kind'], string> = {
+        STATUS_CHANGE: 'STATUS WOULD CHANGE',
+        UNCORROBORATED: 'EXISTING "Received" NOT CORROBORATED',
+        THREAD_CHANGE: 'THREAD ID WOULD CHANGE',
+        UNKNOWN_STATUS: 'STATUS NOT WRITTEN BY THIS AGENT',
+      };
+      if (conflicts.length === 0) {
+        console.log(`\n🧪 DRY RUN COMPARISON: no row's existing Status / Remarks / Thread ID conflicts with this run.`);
+      } else {
+        console.log(`\n🧪 DRY RUN COMPARISON — ${conflicts.length} row(s) where this run disagrees with what is already in the sheet:`);
+        for (const kind of ['STATUS_CHANGE', 'UNCORROBORATED', 'THREAD_CHANGE', 'UNKNOWN_STATUS'] as const) {
+          const group = conflicts.filter(c => c.kind === kind);
+          if (group.length === 0) continue;
+          console.log(`\n   ── ${LABEL[kind]} (${group.length}) ──`);
+          group.forEach(c => {
+            console.log(`   [${c.tabName} row ${c.rowIndex}] "${c.title}" <${c.recipientEmail}>`);
+            console.log(`        now:      ${c.existing}`);
+            console.log(`        would be: ${c.proposed}`);
+          });
+        }
+        console.log(`\n   Nothing above was written. Review these before allowing a live run on these tabs.`);
+      }
     }
 
     // Step 4: Human-in-the-loop Approval & Draft Creation
@@ -554,13 +783,35 @@ export async function approveAndDispatchRun(runId: string): Promise<{ success: b
   }
 }
 
+// ---------------------------------------------------------------------------
+// Self-check — isGuardedLive only. No network, no Gmail, no Sheets, no DB.
+// ---------------------------------------------------------------------------
+function demo() {
+  const assert = (cond: boolean, msg: string) => {
+    if (!cond) throw new Error(`FAIL: ${msg}`);
+  };
+
+  // The bug this function replaces: --i-mean-it blocked the Sheet write-back but
+  // NOT the Gmail draft or the operator-summary email — a guarded source still
+  // got real mail sent about it. Both outbound paths now call this ONE function,
+  // so this is the one assertion that keeps them from drifting apart again.
+  assert(isGuardedLive(false, true) === true, 'live + guarded -> blocked (the exact case that used to leak drafts/summary)');
+  assert(isGuardedLive(false, false) === false, 'live + not guarded -> proceeds, unaffected by unrelated guarded sources');
+  assert(isGuardedLive(true, true) === false, 'dry run + guarded -> never blocked, dry runs are already side-effect-free');
+  assert(isGuardedLive(true, false) === false, 'dry run + not guarded -> never blocked');
+
+  console.log('✅ src/agent.ts self-check passed (isGuardedLive)');
+}
+
 // Command-line execution entrypoint.
 // Guarded so that importing approveAndDispatchRun (e.g. from the dashboard server)
 // does not kick off a full pipeline run as a side effect of the import.
 const invokedDirectly =
   Boolean(process.argv[1]) && /(^|[\\/])agent\.(ts|js)$/.test(process.argv[1]);
 
-if (invokedDirectly) {
+if (invokedDirectly && process.argv.includes('--self-check')) {
+  demo();
+} else if (invokedDirectly) {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
   const showStatsOnly = args.includes('--stats');
@@ -568,9 +819,17 @@ if (invokedDirectly) {
   const reportsOnly = args.includes('--reports-only');
   const approveIdx = args.indexOf('--approve');
   const approveRunId = approveIdx !== -1 ? args[approveIdx + 1] : undefined;
+  // --source <text>: evaluate only matching REPORT_SOURCES, so one workbook can be
+  // dry-run on its own without dragging every other tab through Gmail and the LLM.
+  const sourceIdx = args.indexOf('--source');
+  const sourceFilter = sourceIdx !== -1 ? args[sourceIdx + 1] : undefined;
+  // --i-mean-it: required on a live run before writing to a `requiresConfirmation`
+  // source (currently the MIS registers). Has no effect on --dry-run or on sources
+  // that don't require it — the primary sheet's behaviour is unchanged either way.
+  const confirmed = args.includes('--i-mean-it');
 
   const agent = new CFOAgent();
-  agent.runPipeline({ dryRun, approveRunId, showStatsOnly, reportsOnly }).catch(err => {
+  agent.runPipeline({ dryRun, approveRunId, showStatsOnly, reportsOnly, sourceFilter, confirmed }).catch(err => {
     console.error('\n❌ Unhandled Agent Error:', err);
     process.exit(1);
   });

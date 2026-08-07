@@ -8,6 +8,9 @@
  * Self-check: npm run check:report-schedule
  */
 
+import { CONFIG } from '../config/index.js';
+import { normaliseTaskType } from '../util/task-type.js';
+
 export interface ReportPeriod {
   /** Start of the current period — used as the Gmail search floor and window start. */
   periodStart: Date;
@@ -15,7 +18,13 @@ export interface ReportPeriod {
   dueDate: Date;
   /** Human-readable due description for reminder emails. */
   label: string;
-  cadence: 'daily' | 'weekly' | 'monthly' | 'quarterly';
+  cadence: 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly';
+}
+
+/** FINANCIAL_YEAR_START_MONTH (1-12) as a JS month index, clamped to a real month. */
+function fyStartMonthIndex(): number {
+  const m = CONFIG.FINANCIAL_YEAR_START_MONTH;
+  return Number.isInteger(m) && m >= 1 && m <= 12 ? m - 1 : 3; // default April
 }
 
 /**
@@ -170,6 +179,27 @@ export function resolveReportPeriod(
     };
   }
 
+  // Checked BEFORE quarterly/monthly is irrelevant (no substring overlap), but it
+  // must come before the fall-through. normaliseTaskType already rejects
+  // "Half-Yearly", so anything landing here is a true 12-month cadence.
+  if (normaliseTaskType(taskType) === 'yearly') {
+    // Financial year, not calendar year: these registers are keyed to the Indian
+    // FY (GSTR 9, depreciation run, year-end scrutiny). Configurable because the
+    // FY start month is a business fact, not something this code can derive.
+    const startMonth = fyStartMonthIndex();
+    const fyStartYear = now.getMonth() >= startMonth ? now.getFullYear() : now.getFullYear() - 1;
+    const first = startOfDay(new Date(fyStartYear, startMonth, 1));
+    // Day 0 of the start month, one year on = the last day of the FY.
+    const lastDay = new Date(fyStartYear + 1, startMonth, 0);
+    const due = atTime(addDays(lastDay, parseGraceDays(reviewTiming)), hour, minute);
+    return {
+      periodStart: first,
+      dueDate: due,
+      label: `${timingText || 'this year'} (due ${due.toLocaleDateString('en-IN')})`,
+      cadence: 'yearly',
+    };
+  }
+
   if (type.includes('quarterly')) {
     const quarter = Math.floor(now.getMonth() / 3);
     const first = startOfDay(new Date(now.getFullYear(), quarter * 3, 1));
@@ -259,9 +289,28 @@ function demo() {
   assert(resolveReportPeriod('Within 7 days of month-end', 'Monthly', now)!.dueDate.getDate() === 7, 'month-end + 7 -> 7 Aug');
   assert(resolveReportPeriod('5th of month', 'Monthly', now)!.dueDate.getDate() === 5, 'named day ignores grace parsing');
 
+  // --- yearly: the MIS (Y) register's only cadence, keyed to the financial year ---
+  // Default FY starts in April, so 15-Jul-2026 sits in FY 2026-27: 1 Apr 26 -> 31 Mar 27.
+  const yearly = resolveReportPeriod('Yearly', 'Yearly', now)!;
+  assert(yearly.cadence === 'yearly', 'yearly cadence detected');
+  assert(yearly.periodStart.getMonth() === 3 && yearly.periodStart.getDate() === 1, 'FY starts 1 April');
+  assert(yearly.periodStart.getFullYear() === 2026, 'July 2026 belongs to FY starting Apr 2026');
+  assert(yearly.dueDate.getMonth() === 2 && yearly.dueDate.getDate() === 31, 'FY ends 31 March');
+  assert(yearly.dueDate.getFullYear() === 2027, 'FY 2026-27 ends in 2027');
+  // A date BEFORE the FY start belongs to the previous financial year.
+  const feb = new Date(2026, 1, 10, 13, 0, 0);
+  const yearlyFeb = resolveReportPeriod('Yearly', 'Yearly', feb)!;
+  assert(yearlyFeb.periodStart.getFullYear() === 2025, 'Feb 2026 belongs to FY starting Apr 2025');
+  assert(yearlyFeb.dueDate.getFullYear() === 2026 && yearlyFeb.dueDate.getMonth() === 2, 'that FY ends 31 Mar 2026');
+  assert(resolveReportPeriod('Annual', 'Annual', now)!.cadence === 'yearly', '"Annual" resolves yearly');
+  assert(resolveReportPeriod('Yearly + 30 days', 'Yearly', now)!.dueDate.getMonth() === 3, 'FY-end + 30 days -> 30 Apr');
+
   // --- unknown cadence is skipped, never guessed ---
   assert(resolveReportPeriod('Morning (8:00 AM)', '', now) === null, 'blank task type -> null');
   assert(resolveReportPeriod('Morning (8:00 AM)', 'One-time', now) === null, 'unrecognised cadence -> null');
+  // "Half-Yearly" must NOT be treated as a 12-month cadence just because it
+  // contains "yearly" — there is no half-yearly window, so it is skipped.
+  assert(resolveReportPeriod('Half-Yearly', 'Half-Yearly', now) === null, 'Half-Yearly -> null, not yearly');
 
   // --- ISO round-trip: the string handed to timebox/cadence must keep the time ---
   const iso = daily.dueDate.toISOString();

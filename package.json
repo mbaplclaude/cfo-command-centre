@@ -21,8 +21,12 @@
     "check:task-type": "tsx src/util/task-type.ts",
     "check:timebox": "tsx src/classifier/timebox.test.ts",
     "check:cadence": "tsx src/classifier/cadence.test.ts",
+    "check:write-scope": "tsx src/google/sheets.ts",
+    "check:llm-reasoner": "tsx src/classifier/llm-reasoner.ts",
+    "check:config": "tsx src/config/index.ts",
+    "check:agent-guard": "tsx src/agent.ts --self-check",
     "check:types": "tsc -p tsconfig.check.json",
-    "check": "npm run check:types && npm run check:parse-date && npm run check:task-type && npm run check:timebox && npm run check:cadence && npm run check:report-schedule && npm run check:relevance && npm run check:legacy-status && npm run check:directory && npm run check:dashboard",
+    "check": "npm run check:types && npm run check:parse-date && npm run check:task-type && npm run check:timebox && npm run check:cadence && npm run check:write-scope && npm run check:llm-reasoner && npm run check:config && npm run check:agent-guard && npm run check:report-schedule && npm run check:relevance && npm run check:legacy-status && npm run check:directory && npm run check:dashboard",
     "cleanup:drafts": "tsx src/scripts/cleanup-drafts.ts",
     "discard:run": "tsx src/scripts/discard-run.ts",
     "flag:legacy-status": "tsx src/scripts/flag-legacy-status.ts"

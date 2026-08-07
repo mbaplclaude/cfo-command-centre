@@ -43,6 +43,16 @@ export interface RowEvaluationResult {
   /** The message actually judged — may be an earlier one in the thread. */
   selectedReply: GmailMessageSummary | null;
   matchedReplyCount: number;
+  /**
+   * The Gmail search itself errored, so "no submission" is UNKNOWN, not NO.
+   *
+   * Without this a dead OAuth token turns every row into a confident "nothing was
+   * submitted" — which is exactly the claim a caller must not make on the strength
+   * of a failed search. Callers that draw conclusions from an empty result have to
+   * check this first.
+   */
+  searchFailed: boolean;
+  searchError?: string;
 }
 
 export async function evaluateRowSubmission(
@@ -51,9 +61,11 @@ export async function evaluateRowSubmission(
   log: (line: string) => void = console.log
 ): Promise<RowEvaluationResult> {
   let matchedReplies: GmailMessageSummary[] = [];
+  let searchError: string | undefined;
   try {
     matchedReplies = await deps.gmailClient.searchRepliesFrom(unit.recipientEmail, unit.windowStart);
   } catch (err: any) {
+    searchError = err.message;
     log(`   ⚠️ Gmail search failed for ${unit.recipientEmail}: ${err.message}`);
   }
 
@@ -79,7 +91,7 @@ export async function evaluateRowSubmission(
   }
 
   if (matchedReplies.length === 0) {
-    return { classification: null, selectedReply: null, matchedReplyCount: 0 };
+    return { classification: null, selectedReply: null, matchedReplyCount: 0, searchFailed: Boolean(searchError), searchError };
   }
 
   // Consider every matched message in the thread, not just the newest one.
@@ -121,5 +133,5 @@ export async function evaluateRowSubmission(
 
   log(`   └─ Classification Result: ${classification.status} | Remarks: "${classification.remarks}"`);
 
-  return { classification, selectedReply, matchedReplyCount: matchedReplies.length };
+  return { classification, selectedReply, matchedReplyCount: matchedReplies.length, searchFailed: false };
 }

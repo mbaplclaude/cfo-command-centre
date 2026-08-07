@@ -54,7 +54,10 @@ export class TimeBoxMatcher {
       const endMonth = (currentQuarter + 1) * 3;
       endWindow = new Date(dueDate.getFullYear(), endMonth, 0, 23, 59, 59, 999);
     } else {
-      // One-time (including a blank Task Type): end of the due date day
+      // One-time (including a blank Task Type), and yearly: end of the due date day.
+      // Yearly needs no widening — its window START already spans the whole
+      // financial year, and pushing the END past the due day would accept a
+      // submission arriving months after the year it was owed for.
       endWindow.setHours(23, 59, 59, 999);
     }
 

@@ -14,8 +14,23 @@ Recommended project directory:
 ## 🔒 Non-Negotiable Safety Features
 1. **Bad/Missing Data Filter:** Rows missing `Email ID` or `Date Assigned`, or whose Email ID is the agent's own mailbox (`OWN_SENDER_EMAILS`), are strictly excluded from emails and logged in a "Needs Attention" report.
 2. **Human-in-the-Loop Approval:** When `REQUIRE_APPROVAL=true`, reminders are created as **Gmail Drafts** and a single summary email is sent to the operator with a Run ID. Reminders are only dispatched after explicit CLI approval (`npm run agent -- --approve <RUN_ID>`).
-3. **Restricted Sheet Updates:** Writes are strictly isolated to tabs `"3. Staff Tracker"` and `"4. Report Calendar"` on columns `Status`, `Remarks`, `Days`/`Overdue Days`, and `Thread ID`.
+3. **Restricted Sheet Updates:** Writes are strictly isolated to an allowlist of `(spreadsheet, tab)` pairs — the primary workbook's `"3. Staff Tracker"`, plus every entry in `CONFIG.REPORT_SOURCES` — and only on columns `Status`, `Remarks`, `Days`/`Overdue Days`, and `Thread ID`. A tab name alone grants nothing: the spreadsheet ID must match too. Enforced by `isWriteAllowed()` in `src/google/sheets.ts` (`npm run check:write-scope`).
 4. **Sender Email Filtering:** Outbound emails and self-addresses are filtered out to prevent false-positive reply matches.
+
+---
+
+## ➕ Standing Rule: Adding a New Google Sheet
+
+**"Add a new Google Sheet" always means 4 things, not 1.**
+
+Whenever asked to add a new Google Sheet / source to this project, always do **all four** of the following together — never just the backend:
+
+1. **Backend/CLI** — add it to `CONFIG.REPORT_SOURCES` in `src/config/index.ts` so `src/agent.ts` can read, classify, and write it.
+2. **Dashboard** — add matching config so the dashboard's tab/lookup actually finds and displays it. *This has broken before*: the CLI worked correctly while the dashboard showed "Could not load" — root cause was `CONFIG.REPORT_SOURCES` reaching the CLI (a fresh process every run) but the dashboard's long-lived `tsx` process still serving stale code from before the source was added. Always verify the dashboard tab actually renders the new sheet's data, not just that `/api/health` lists it — and restart the dashboard process if it was already running.
+3. **Directory** — make sure any new people/emails introduced by this sheet get included in directory sync (`src/scripts/sync-directory.ts`), not just the original sheets.
+4. **Employee Monitor** — confirm reminder logs, approval requests, and per-employee stats correctly include (or deliberately exclude, with a stated reason) rows from the new sheet, not just the original ones.
+
+Never treat this as "just update `CONFIG.REPORT_SOURCES` and done." Confirm all four areas — with evidence, not just code review — before reporting the task complete.
 
 ---
 

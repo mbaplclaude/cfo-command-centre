@@ -4,6 +4,22 @@ import path from 'path';
 import { CONFIG } from '../config/index.js';
 import { StaffTrackerRow, ReportCalendarRow, UnifiedTask } from '../types/index.js';
 
+/**
+ * True only for a (spreadsheet, tab) pair this module may write to.
+ *
+ * The write scope is derived from CONFIG.REPORT_SOURCES plus the primary Staff
+ * Tracker, so widening it is a config edit in one place and can never happen by
+ * accident from passing a new tab name to a writer. A tab name alone is no longer
+ * sufficient authority — the spreadsheet id has to match too, otherwise a second
+ * workbook that happened to contain a "4. Report Calendar" tab would be writable.
+ *
+ * Self-check: npm run check:write-scope
+ */
+export function isWriteAllowed(spreadsheetId: string, tabName: string): boolean {
+  if (spreadsheetId === CONFIG.GOOGLE_SHEET_ID && tabName === CONFIG.STAFF_TRACKER_TAB) return true;
+  return CONFIG.REPORT_SOURCES.some(s => s.sheetId === spreadsheetId && s.tab === tabName);
+}
+
 export class GoogleSheetsClient {
   private sheetsClient: sheets_v4.Sheets | null = null;
 
@@ -52,17 +68,20 @@ export class GoogleSheetsClient {
   /**
    * Fetch a tab and locate its header row.
    *
-   * Both tracker tabs open with title/banner rows before the real header, so the
-   * header cannot be assumed to be row 1. It is found as the first row carrying an
-   * "Email ID" column — the one column every tracked row must have.
+   * Every tracker tab opens with title/banner rows before the real header (the MIS
+   * register tabs put theirs on row 5), so the header cannot be assumed to be row
+   * 1. It is found as the first row carrying an "Email ID" column — the one column
+   * every tracked row must have. A tab without one (e.g. the MIS "Monthly "
+   * checklist, which has no Email ID) yields no rows rather than mis-parsed ones.
    */
   private async readTabValues(
+    spreadsheetId: string,
     tabName: string,
     range = 'A1:Z500'
   ): Promise<{ headers: string[]; headerRow: number; values: any[][] }> {
     const sheets = await this.getClient();
     const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: CONFIG.GOOGLE_SHEET_ID,
+      spreadsheetId,
       range: `'${tabName}'!${range}`,
     });
 
@@ -83,7 +102,7 @@ export class GoogleSheetsClient {
    * Read raw rows from "3. Staff Tracker" tab
    */
   public async readStaffTracker(): Promise<{ rows: StaffTrackerRow[]; invalidRows: UnifiedTask[] }> {
-    const { headers, headerRow, values } = await this.readTabValues(CONFIG.STAFF_TRACKER_TAB);
+    const { headers, headerRow, values } = await this.readTabValues(CONFIG.GOOGLE_SHEET_ID, CONFIG.STAFF_TRACKER_TAB);
     if (headerRow === -1) {
       return { rows: [], invalidRows: [] };
     }
@@ -176,10 +195,18 @@ export class GoogleSheetsClient {
   }
 
   /**
-   * Read raw rows from "4. Report Calendar" tab
+   * Read raw rows from any tab using the "4. Report Calendar" column layout.
+   *
+   * Defaults to the primary workbook's own Report Calendar so existing callers are
+   * unchanged; the MIS register tabs pass their own (sheetId, tab) pair from
+   * CONFIG.REPORT_SOURCES. One reader, several sources — the column mapping below
+   * is header-name based, so it is the same code either way.
    */
-  public async readReportCalendar(): Promise<{ rows: ReportCalendarRow[]; invalidRows: UnifiedTask[] }> {
-    const { headers, headerRow, values } = await this.readTabValues(CONFIG.REPORT_CALENDAR_TAB);
+  public async readReportCalendar(
+    spreadsheetId: string = CONFIG.GOOGLE_SHEET_ID,
+    tabName: string = CONFIG.REPORT_CALENDAR_TAB
+  ): Promise<{ rows: ReportCalendarRow[]; invalidRows: UnifiedTask[] }> {
+    const { headers, headerRow, values } = await this.readTabValues(spreadsheetId, tabName);
     if (headerRow === -1) {
       return { rows: [], invalidRows: [] };
     }
@@ -210,7 +237,7 @@ export class GoogleSheetsClient {
       const sourceWhoSends = (row[colIndex.sourceWhoSends] || '').trim();
 
       const unified: UnifiedTask = {
-        tabName: '4. Report Calendar',
+        tabName,
         rowIndex: i + 1,
         idNum: (row[colIndex.idNum] || '').trim(),
         taskDescriptionOrName: reportName,
@@ -267,17 +294,20 @@ export class GoogleSheetsClient {
    * Both tracker tabs route through here so the safety rule lives in one place.
    */
   private async updateRowColumns(
+    spreadsheetId: string,
     tabName: string,
     rowIndex: number,
     values: { status: string; remarks: string; days: string; threadId: string },
     daysHeader: 'days' | 'overduedays'
   ): Promise<void> {
-    if (tabName !== CONFIG.STAFF_TRACKER_TAB && tabName !== CONFIG.REPORT_CALENDAR_TAB) {
-      throw new Error(`Write rejected: tab "${tabName}" is not in the approved write scope.`);
+    if (!isWriteAllowed(spreadsheetId, tabName)) {
+      throw new Error(`Write rejected: tab "${tabName}" on sheet ${spreadsheetId} is not in the approved write scope.`);
     }
 
     const sheets = await this.getClient();
-    const { headers, headerRow } = await this.readTabValues(tabName, 'A1:Z20');
+    // The MIS register tabs carry their header on row 5, so a 20-row probe is
+    // needed here — not just row 1.
+    const { headers, headerRow } = await this.readTabValues(spreadsheetId, tabName, 'A1:Z20');
     if (headerRow === -1) {
       throw new Error(`Write rejected: could not locate the header row on "${tabName}".`);
     }
@@ -297,7 +327,7 @@ export class GoogleSheetsClient {
       }
       const colLetter = String.fromCharCode(65 + colIndex);
       await sheets.spreadsheets.values.update({
-        spreadsheetId: CONFIG.GOOGLE_SHEET_ID,
+        spreadsheetId,
         range: `'${tabName}'!${colLetter}${rowIndex}`,
         // RAW, not USER_ENTERED: Remarks carries email subject text verbatim, and
         // USER_ENTERED would evaluate anything starting with "=" or "+" as a
@@ -319,6 +349,7 @@ export class GoogleSheetsClient {
     threadId: string
   ): Promise<void> {
     await this.updateRowColumns(
+      CONFIG.GOOGLE_SHEET_ID,
       CONFIG.STAFF_TRACKER_TAB,
       rowIndex,
       { status, remarks, days, threadId },
@@ -327,17 +358,24 @@ export class GoogleSheetsClient {
   }
 
   /**
-   * Update Status, Remarks, Overdue Days, and Thread ID for a row in "4. Report Calendar".
+   * Update Status, Remarks, Overdue Days, and Thread ID for a report row.
+   *
+   * The sheet/tab pair is trailing and optional so it defaults to the primary
+   * workbook's "4. Report Calendar" — every pre-existing 5-argument caller keeps
+   * working untouched, and the MIS register rows pass their own pair.
    */
   public async updateReportCalendarRow(
     rowIndex: number,
     status: string,
     remarks: string,
     overdueDays: string,
-    threadId: string
+    threadId: string,
+    spreadsheetId: string = CONFIG.GOOGLE_SHEET_ID,
+    tabName: string = CONFIG.REPORT_CALENDAR_TAB
   ): Promise<void> {
     await this.updateRowColumns(
-      CONFIG.REPORT_CALENDAR_TAB,
+      spreadsheetId,
+      tabName,
       rowIndex,
       { status, remarks, days: overdueDays, threadId },
       'overduedays'
@@ -354,13 +392,18 @@ export class GoogleSheetsClient {
    * a skip-and-continue: this method exists to write exactly one column, so if
    * that column can't be found there is nothing left for it to have done.
    */
-  public async updateTaskType(tabName: string, rowIndex: number, taskType: string): Promise<void> {
-    if (tabName !== CONFIG.STAFF_TRACKER_TAB && tabName !== CONFIG.REPORT_CALENDAR_TAB) {
-      throw new Error(`Write rejected: tab "${tabName}" is not in the approved write scope.`);
+  public async updateTaskType(
+    tabName: string,
+    rowIndex: number,
+    taskType: string,
+    spreadsheetId: string = CONFIG.GOOGLE_SHEET_ID
+  ): Promise<void> {
+    if (!isWriteAllowed(spreadsheetId, tabName)) {
+      throw new Error(`Write rejected: tab "${tabName}" on sheet ${spreadsheetId} is not in the approved write scope.`);
     }
 
     const sheets = await this.getClient();
-    const { headers, headerRow } = await this.readTabValues(tabName, 'A1:Z20');
+    const { headers, headerRow } = await this.readTabValues(spreadsheetId, tabName, 'A1:Z20');
     if (headerRow === -1) {
       throw new Error(`Write rejected: could not locate the header row on "${tabName}".`);
     }
@@ -372,7 +415,7 @@ export class GoogleSheetsClient {
 
     const colLetter = String.fromCharCode(65 + colIndex);
     await sheets.spreadsheets.values.update({
-      spreadsheetId: CONFIG.GOOGLE_SHEET_ID,
+      spreadsheetId,
       range: `'${tabName}'!${colLetter}${rowIndex}`,
       valueInputOption: 'RAW', // literal text; never let the Sheet reinterpret it
       requestBody: { values: [[taskType]] },
@@ -382,7 +425,14 @@ export class GoogleSheetsClient {
   /**
    * Append a new task row to the specified Google Sheet tab.
    * Only writes user-supplied columns; leaves Status/Remarks/Thread ID/Days blank for the pipeline.
-   * CRITICAL SAFETY RULE: Only writes to tabs "3. Staff Tracker" or "4. Report Calendar".
+   *
+   * CRITICAL SAFETY RULE: only "3. Staff Tracker" (primary workbook) or a tab listed in
+   * CONFIG.REPORT_SOURCES may be appended to — the SAME allowlist isWriteAllowed() already
+   * enforces for every other write this class makes. The (spreadsheetId, tab) pair is
+   * resolved HERE from that list, never trusted from the caller, so a report-shaped source
+   * (Report Calendar, both MIS registers today) becomes appendable the moment it is added
+   * to CONFIG.REPORT_SOURCES — no second hardcoded tab-name check to keep in sync.
+   *
    * Returns the row index of the newly appended row.
    */
   public async appendRow(
@@ -397,15 +447,18 @@ export class GoogleSheetsClient {
       dueDate?: string;
     }
   ): Promise<number> {
-    // Safety: only allow writes to approved tabs
-    if (tabName !== CONFIG.STAFF_TRACKER_TAB && tabName !== CONFIG.REPORT_CALENDAR_TAB) {
+    const isStaff = tabName === CONFIG.STAFF_TRACKER_TAB;
+    const source = CONFIG.REPORT_SOURCES.find(s => s.tab === tabName);
+    const spreadsheetId = isStaff ? CONFIG.GOOGLE_SHEET_ID : source?.sheetId;
+
+    if (!spreadsheetId || !isWriteAllowed(spreadsheetId, tabName)) {
       throw new Error(`Write rejected: tab "${tabName}" is not in the approved write scope.`);
     }
 
     const sheets = await this.getClient();
 
     // Resolve the real header row (the tabs open with title/banner rows) to map columns
-    const { headers, headerRow } = await this.readTabValues(tabName, 'A1:Z20');
+    const { headers, headerRow } = await this.readTabValues(spreadsheetId, tabName, 'A1:Z20');
     if (headerRow === -1) {
       throw new Error(`Write rejected: could not locate the header row on "${tabName}".`);
     }
@@ -418,7 +471,7 @@ export class GoogleSheetsClient {
       if (idx !== -1) newRow[idx] = value;
     };
 
-    if (tabName === CONFIG.STAFF_TRACKER_TAB) {
+    if (isStaff) {
       setCol('taskdescription', fields.taskDescription);
       setCol('assignedto', fields.assignedTo);
       setCol('emailid', fields.emailId);
@@ -428,7 +481,9 @@ export class GoogleSheetsClient {
       setCol('duedate', fields.dueDate || '');
       // Leave status, remarks, thread id, days BLANK for the pipeline
     } else {
-      // Report Calendar columns
+      // Report-shaped columns — Report Calendar and both MIS registers share this
+      // exact layout (it's why one reader already covers all three), so one
+      // branch here covers all of them too.
       setCol('reportname', fields.taskDescription);
       setCol('source/whosends', fields.assignedTo);
       setCol('emailid', fields.emailId);
@@ -439,7 +494,7 @@ export class GoogleSheetsClient {
     }
 
     const appendResponse = await sheets.spreadsheets.values.append({
-      spreadsheetId: CONFIG.GOOGLE_SHEET_ID,
+      spreadsheetId,
       range: `'${tabName}'!A:Z`,
       // RAW keeps the date exactly as the operator typed it. USER_ENTERED made
       // Sheets re-parse "2026-07-29" into a date serial and re-render it in the
@@ -456,4 +511,48 @@ export class GoogleSheetsClient {
 
     return newRowIndex;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Self-check — write scope only. No network, no credentials.
+// ---------------------------------------------------------------------------
+function demo() {
+  const assert = (cond: boolean, msg: string) => {
+    if (!cond) throw new Error(`FAIL: ${msg}`);
+  };
+
+  const PRIMARY = CONFIG.GOOGLE_SHEET_ID;
+  const MIS = CONFIG.MIS_CHECKLIST_SHEET_ID;
+
+  // Everything the pipeline legitimately writes to.
+  assert(isWriteAllowed(PRIMARY, CONFIG.STAFF_TRACKER_TAB), 'primary Staff Tracker writable');
+  assert(isWriteAllowed(PRIMARY, CONFIG.REPORT_CALENDAR_TAB), 'primary Report Calendar writable');
+  assert(isWriteAllowed(MIS, 'MIS_Closing_Report (M)'), 'MIS monthly register writable');
+  assert(isWriteAllowed(MIS, 'MIS_Closing_Report (Y)'), 'MIS yearly register writable');
+  for (const s of CONFIG.REPORT_SOURCES) {
+    assert(isWriteAllowed(s.sheetId, s.tab), `configured source "${s.label}" is writable`);
+  }
+
+  // The MIS checklist tab is a different format and was deliberately left out of
+  // scope. If it ever becomes writable, this assertion is the thing that fails.
+  assert(!isWriteAllowed(MIS, 'Monthly '), 'MIS "Monthly " checklist tab is NOT writable');
+  assert(!isWriteAllowed(MIS, 'Monthly'), 'nor is it reachable by trimming its trailing space');
+
+  // Cross-workbook confusion: the right tab name on the wrong sheet must be refused.
+  assert(!isWriteAllowed(MIS, CONFIG.STAFF_TRACKER_TAB), 'Staff Tracker name on the MIS sheet is refused');
+  assert(!isWriteAllowed(MIS, CONFIG.REPORT_CALENDAR_TAB), 'Report Calendar name on the MIS sheet is refused');
+  assert(!isWriteAllowed(PRIMARY, 'MIS_Closing_Report (M)'), 'MIS tab name on the primary sheet is refused');
+  assert(!isWriteAllowed('some-other-sheet-id', CONFIG.REPORT_CALENDAR_TAB), 'unknown workbook is refused');
+
+  // Near-misses and empties.
+  assert(!isWriteAllowed(PRIMARY, ''), 'blank tab name refused');
+  assert(!isWriteAllowed('', CONFIG.REPORT_CALENDAR_TAB), 'blank sheet id refused');
+  assert(!isWriteAllowed(PRIMARY, '4. Report Calendar '), 'trailing space is a different tab, refused');
+  assert(!isWriteAllowed(PRIMARY, '3. staff tracker'), 'tab matching is case-sensitive, refused');
+
+  console.log('✅ src/google/sheets.ts write-scope self-check passed');
+}
+
+if (process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('google/sheets.ts')) {
+  demo();
 }

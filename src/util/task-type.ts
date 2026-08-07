@@ -9,7 +9,7 @@
  * Self-check: npm run check:task-type
  */
 
-export type Cadence = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'one-time' | 'no-mail';
+export type Cadence = 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly' | 'one-time' | 'no-mail';
 
 /** The exact Sheet text that suppresses all reminder mail for a row. */
 export const NO_MAIL_TASK_TYPE = 'No Mail Sent';
@@ -30,6 +30,7 @@ export const TASK_TYPE_OPTIONS = [
   'Weekly',
   'Monthly',
   'Quarterly',
+  'Yearly',
   NO_MAIL_TASK_TYPE,
 ];
 
@@ -41,8 +42,14 @@ export function normaliseTaskType(taskType: string): Cadence {
   if (t.includes('no mail')) return 'no-mail';
   if (t.includes('daily')) return 'daily';
   if (t.includes('weekly')) return 'weekly';
+  // "Half-Yearly" / "Semi-Annual" CONTAIN "yearly" and "annual", so they are
+  // excluded before those tests run. There is no half-yearly window, so they fall
+  // through to one-time and get skipped-and-reported rather than silently chased on
+  // a 12-month window that is twice too long.
+  if (/half[\s-]?yearly|semi[\s-]?annual|bi[\s-]?annual/.test(t)) return 'one-time';
   if (t.includes('monthly')) return 'monthly';
   if (t.includes('quarterly')) return 'quarterly';
+  if (t.includes('yearly') || t.includes('annual')) return 'yearly';
   return 'one-time';
 }
 
@@ -74,6 +81,13 @@ function demo() {
   assert(normaliseTaskType('weekly') === 'weekly', 'lowercase weekly');
   assert(normaliseTaskType('Monthly ') === 'monthly', 'trailing space monthly');
   assert(normaliseTaskType('Quarterly') === 'quarterly', 'Quarterly');
+  assert(normaliseTaskType('Yearly') === 'yearly', 'Yearly (the MIS (Y) register\'s only Task Type)');
+  assert(normaliseTaskType('Annual') === 'yearly', 'Annual -> yearly');
+  // These contain "yearly"/"annual" but are NOT annual — they must not inherit a
+  // 12-month window by substring accident.
+  assert(normaliseTaskType('Half-Yearly') === 'one-time', 'Half-Yearly is not yearly');
+  assert(normaliseTaskType('Half Yearly') === 'one-time', 'unhyphenated Half Yearly is not yearly');
+  assert(normaliseTaskType('Semi-Annual') === 'one-time', 'Semi-Annual is not yearly');
 
   // The requested default: blank means One-Time, not "unknown, do nothing".
   assert(normaliseTaskType('') === 'one-time', 'blank -> one-time');
@@ -91,12 +105,13 @@ function demo() {
 
   // Every selectable option must itself normalise cleanly — a value the dropdown
   // offers that normaliseTaskType can't make sense of would be a silent bug.
-  assert(TASK_TYPE_OPTIONS.length === 9, 'canonical option count is 9');
+  assert(TASK_TYPE_OPTIONS.length === 10, 'canonical option count is 10');
   assert(TASK_TYPE_OPTIONS.includes('Daily') && TASK_TYPE_OPTIONS.includes('Monthly'), 'cadence options present');
+  assert(TASK_TYPE_OPTIONS.includes('Yearly'), 'Yearly is selectable');
   assert(TASK_TYPE_OPTIONS.includes(NO_MAIL_TASK_TYPE), '"No Mail Sent" is selectable');
   for (const opt of TASK_TYPE_OPTIONS) {
     const n = normaliseTaskType(opt);
-    assert(['daily', 'weekly', 'monthly', 'quarterly', 'one-time', 'no-mail'].includes(n), `"${opt}" normalises to a known cadence`);
+    assert(['daily', 'weekly', 'monthly', 'quarterly', 'yearly', 'one-time', 'no-mail'].includes(n), `"${opt}" normalises to a known cadence`);
   }
 
   // --- "No Mail Sent" suppression ---
@@ -106,7 +121,7 @@ function demo() {
   assert(isMailSuppressed(NO_MAIL_TASK_TYPE), 'suppression detected');
 
   // Suppression must not be reachable by accident from ordinary cadences...
-  for (const t of ['Daily', 'Weekly', 'Monthly', 'Quarterly', 'Routine', 'One-time', '']) {
+  for (const t of ['Daily', 'Weekly', 'Monthly', 'Quarterly', 'Yearly', 'Routine', 'One-time', '']) {
     assert(!isMailSuppressed(t), `"${t || '(blank)'}" is NOT suppressed`);
   }
   // ...and flipping the type away from it restores eligibility with no residue,

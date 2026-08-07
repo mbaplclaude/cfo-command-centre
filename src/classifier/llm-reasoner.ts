@@ -2,6 +2,19 @@ import Anthropic from '@anthropic-ai/sdk';
 import { CONFIG } from '../config/index.js';
 import { GmailMessageSummary, ClassificationResult } from '../types/index.js';
 
+/**
+ * Strip a ```json ... ``` (or bare ``` ... ```) fence Claude sometimes wraps its
+ * JSON in despite being told "no additional text". Without this a fenced response
+ * throws on JSON.parse and silently drops into the deterministic fallback —
+ * exactly the failure that put a fallback-phrased classification into the sheet
+ * on 2026-08-04 (Row 7, MIS_Closing_Report (M)).
+ */
+export function stripCodeFence(text: string): string {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i);
+  return fenced ? fenced[1].trim() : trimmed;
+}
+
 export class LLMReasoner {
   private anthropic: Anthropic | null = null;
 
@@ -83,7 +96,7 @@ Respond STRICTLY in JSON format with no additional text:
 
       const textBlock = response.content.find(b => b.type === 'text');
       const text = textBlock ? textBlock.text : '';
-      const parsed = JSON.parse(text);
+      const parsed = JSON.parse(stripCodeFence(text));
 
       let finalStatus = parsed.classification;
       if (!timeboxAnalysis.isWithin && (finalStatus === 'Received' || finalStatus === 'Received (Early)')) {
@@ -139,4 +152,29 @@ Respond STRICTLY in JSON format with no additional text:
       reasoning: 'Matched reply received within window.',
     };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Self-check — stripCodeFence only. No network, no credentials.
+// ---------------------------------------------------------------------------
+function demo() {
+  const assert = (cond: boolean, msg: string) => {
+    if (!cond) throw new Error(`FAIL: ${msg}`);
+  };
+
+  const rawJson = '{"classification":"Received","summaryRemarks":"ok","confidence":0.9,"reasoning":"x"}';
+
+  assert(stripCodeFence(rawJson) === rawJson, 'plain JSON with no fence passes through unchanged');
+  assert(stripCodeFence('```json\n' + rawJson + '\n```') === rawJson, '```json fence stripped');
+  assert(stripCodeFence('```\n' + rawJson + '\n```') === rawJson, 'bare ``` fence (no "json" tag) stripped');
+  assert(stripCodeFence('  ```json\n' + rawJson + '\n```  ') === rawJson, 'surrounding whitespace tolerated');
+  assert(stripCodeFence('```JSON\n' + rawJson + '\n```') === rawJson, 'fence language tag is case-insensitive');
+  // Real fenced text must still be valid JSON once stripped.
+  JSON.parse(stripCodeFence('```json\n' + rawJson + '\n```'));
+
+  console.log('✅ src/classifier/llm-reasoner.ts self-check passed');
+}
+
+if (process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('classifier/llm-reasoner.ts')) {
+  demo();
 }

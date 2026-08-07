@@ -1,4 +1,10 @@
-export type TaskTabName = "3. Staff Tracker" | "4. Report Calendar";
+/**
+ * A tracker tab name. Left as a plain string because the set is now open: report
+ * tabs come from CONFIG.REPORT_SOURCES, which spans more than one workbook. The
+ * authority on what may be READ or WRITTEN is that config list plus
+ * GoogleSheetsClient.isWriteAllowed — never this type.
+ */
+export type TaskTabName = string;
 
 export type TaskStatus =
   | "Pending"

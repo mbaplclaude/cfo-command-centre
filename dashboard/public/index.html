@@ -280,6 +280,10 @@ const STATUS_META = {
 const TABS = [
   { id: 'staff',     label: 'Staff Tracker',    icon: '📋' },
   { id: 'report',    label: 'Report Calendar',  icon: '🗓' },
+  // One combined tab for both MIS registers, with a Monthly/Yearly sub-toggle —
+  // they share Report Calendar's exact column layout, so two top-level tabs would
+  // have been the same table twice.
+  { id: 'mis',       label: 'MIS Checklist',    icon: '🧾' },
   { id: 'directory', label: 'Directory',        icon: '👥' },
   { id: 'monitor',   label: 'Employee Monitor', icon: '📈' },
 ];
@@ -287,6 +291,9 @@ const TABS = [
 const state = {
   tab: 'staff',
   monitorView: 'stats',
+  // Which MIS register the combined tab is showing. Set at boot from
+  // /api/health's misSources (i.e. from CONFIG.REPORT_SOURCES), never hardcoded.
+  misTab: null,
   expanded: null,
   health: null,
   data: {},       // per-tab payloads
@@ -456,8 +463,14 @@ function linkifyText(text) {
 async function load(tab, { refresh = false } = {}) {
   state.loading = true; state.error = null; render();
   try {
-    if (tab === 'staff' || tab === 'report') {
-      const q = tab === 'report' ? 'Report Calendar' : 'Staff Tracker';
+    if (tab === 'staff' || tab === 'report' || tab === 'mis') {
+      // MIS passes the register's EXACT sheet tab name — the server resolves it
+      // by exact match, since "MIS_Closing_Report (M)" contains "report" and a
+      // loose hint would land on Report Calendar instead.
+      if (tab === 'mis' && !state.misTab) {
+        throw new Error('No MIS register is configured — CONFIG.REPORT_SOURCES lists none on the MIS workbook.');
+      }
+      const q = tab === 'mis' ? state.misTab : tab === 'report' ? 'Report Calendar' : 'Staff Tracker';
       // The Directory comes along for the ride: the Add a Task form autofills
       // Email ID from it, so it has to be loaded before the form is rendered.
       const [tasks, attention, directory] = await Promise.all([
@@ -465,7 +478,7 @@ async function load(tab, { refresh = false } = {}) {
         api('/api/needs-attention'),
         api('/api/directory').catch(() => ({ employees: [] })),
       ]);
-      state.data[tab] = { tasks: tasks.tasks, tab: tasks.tab, attention: attention.rows };
+      state.data[tab] = { tasks: tasks.tasks, tab: tasks.tab, attention: attention.rows, sheetWarning: tasks.sheetWarning };
       state.data.directory = directory;
     } else if (tab === 'directory') {
       state.data.directory = await api('/api/directory');
@@ -489,7 +502,12 @@ function taskView(tabId) {
   const tasks = d.tasks || [];
   const attention = (d.attention || []).filter(r => r.tabName === d.tab);
   const counts = tasks.reduce((acc, t) => ({ ...acc, [t.category]: (acc[t.category] || 0) + 1 }), {});
-  const isReport = tabId === 'report';
+  // The MIS registers use Report Calendar's column layout exactly, so they render
+  // through the same branch — "isReport" means "report-shaped", not "is the
+  // primary Report Calendar tab". isMis carries the differences that are real:
+  // read-only, and not in the scheduled run.
+  const isMis = tabId === 'mis';
+  const isReport = tabId !== 'staff';
   const dirCount = directoryEntries().length;
 
   const summary = ['overdue', 'pending', 'received', 'early', 'unclear'].map(k => `
@@ -515,7 +533,7 @@ function taskView(tabId) {
         <td class="ccc-num">${t.rowIndex}${sheetLabel(t.idNum)}</td>
         <td>
           <div class="ccc-primary">${esc(t.taskDescription || '(untitled)')}</div>
-          ${taskTypeEditor(t)}
+          ${taskTypeEditor(t, isMis)}
           ${t.remarks || t.threadId || t.submission ? `<button class="ccc-expand" data-expand="${esc(t.tabName)}:${t.rowIndex}">${open ? 'Hide' : 'Show'} agent detail</button>` : ''}
           ${open ? agentDetail(t) : ''}
           ${!open && t.submission?.attachments?.length ? `<div class="ccc-sub">${attachmentLinks(t.submission.attachments)}</div>` : ''}
@@ -531,11 +549,33 @@ function taskView(tabId) {
       </tr>`;
   }).join('');
 
+  // What this tab's rows are actually subject to. The MIS line is the important
+  // one: these registers are NOT in the scheduled run, and saying otherwise here
+  // would be the single most misleading sentence on the page. New reports CAN be
+  // added below (same as Report Calendar) — it's the pipeline's automated
+  // classification/reminder path on EXISTING rows that still needs --i-mean-it.
+  const scopeNote = canSelect
+    ? ' Overdue rows can be selected below to send a reminder by hand — this tab is not part of the hourly scheduled run.'
+    : isMis
+      ? ' New reports can be added below. Existing rows are otherwise read-only from here — they are evaluated by hand with <code>npm run agent -- --dry-run --source MIS</code>, and the automated classification/reminder pipeline still needs <code>--i-mean-it</code> before it may act on them for real. These registers are <b>not</b> in the hourly scheduled run.'
+      : ' This tab is part of the automated hourly reminder run.';
+
+  // Monthly / Yearly toggle, built from /api/health (CONFIG.REPORT_SOURCES).
+  const misSources = state.health?.misSources || [];
+  const subtabs = isMis && misSources.length
+    ? `<div class="ccc-subtabs">${misSources.map(s =>
+        `<button class="ccc-subtab" role="tab" aria-selected="${state.misTab === s.tab}" data-mis-tab="${esc(s.tab)}">${esc(s.label)}</button>`
+      ).join('')}</div>`
+    : '';
+
   return `
     <div class="ccc-pagehead">
-      <h1>${esc(d.tab)}</h1>
-      <p>Live from the Google Sheet — ${tasks.length} row${tasks.length === 1 ? '' : 's'} passing the safety filter.${canSelect ? ' Overdue rows can be selected below to send a reminder by hand — this tab is not part of the hourly scheduled run.' : ' This tab is part of the automated hourly reminder run.'}</p>
+      <h1>${isMis ? 'MIS Checklist' : esc(d.tab)}</h1>
+      <p>${isMis ? `<b>${esc(d.tab)}</b> — live from the Google Sheet, ` : 'Live from the Google Sheet — '}${tasks.length} row${tasks.length === 1 ? '' : 's'} passing the safety filter.${scopeNote}</p>
     </div>
+
+    ${subtabs}
+    ${warnBox(d.sheetWarning)}
 
     <div class="ccc-summary">${summary}</div>
 
@@ -579,8 +619,8 @@ function taskView(tabId) {
 
     <section class="ccc-card">
       <header><div>
-        <h3>Add a task</h3>
-        <p>Writes a new row directly to <b>${esc(d.tab)}</b>. Status, Remarks, Days and Thread ID are left blank for the agent to fill.</p>
+        <h3>${isMis ? 'Add a report' : 'Add a task'}</h3>
+        <p>Writes a new row directly to <b>${esc(d.tab)}</b>${isMis ? ` — whichever register is selected above` : ''}. Status, Remarks, Days and Thread ID are left blank for the agent to fill.</p>
       </div></header>
       <form class="ccc-form" data-form="task" data-tab="${tabId}">
         ${field('taskDescription', isReport ? 'Report name' : 'Task description', 'text', true)}
@@ -684,7 +724,17 @@ function sheetLabel(idNum) {
  * an option even if it isn't in the canonical list (blank, or old free text
  * already on the Sheet) — rendering the field must never itself change data.
  */
-function taskTypeEditor(t) {
+function taskTypeEditor(t, readOnly = false) {
+  // The MIS registers still carry requiresConfirmation, so nothing in this UI may
+  // write to them — the CLI itself refuses without --i-mean-it, and a dropdown
+  // here would be a quieter way around that. Shown as plain text instead; the
+  // server refuses the edit too (403), so this is presentation, not the guard.
+  if (readOnly) {
+    return `<div class="ccc-tasktype-row">
+      <span class="ccc-badge ccc-cat-pending" title="Read-only — edit the Task Type in the Sheet itself">${esc(t.taskType || '— unspecified —')}</span>
+    </div>`;
+  }
+
   const key = `${t.tabName}|${t.rowIndex}`;
   const busy = state.taskTypeEditing[key] === 'busy';
   const result = typeof state.taskTypeEditing[key] === 'object' ? state.taskTypeEditing[key] : null;
@@ -1213,10 +1263,18 @@ document.addEventListener('keydown', ev => {
 // --- events ----------------------------------------------------------------
 document.addEventListener('click', async ev => {
   const t = ev.target.closest(
-    '[data-tab],[data-subtab],[data-expand],[data-refresh],[data-submit],[data-approve],' +
+    '[data-tab],[data-subtab],[data-mis-tab],[data-expand],[data-refresh],[data-submit],[data-approve],' +
       '[data-staff-preview],[data-staff-confirm],[data-staff-cancel],[data-staff-close],[data-toggle-expired]'
   );
   if (!t) return;
+
+  // Switching register re-reads that tab. The server memoises the Sheet for 15s,
+  // so flipping back and forth costs nothing.
+  if (t.dataset.misTab) {
+    if (state.misTab === t.dataset.misTab) return;
+    state.misTab = t.dataset.misTab;
+    return load('mis');
+  }
 
   if (t.dataset.toggleExpired !== undefined) {
     state.showExpiredApprovals = !state.showExpiredApprovals;
@@ -1239,7 +1297,10 @@ document.addEventListener('click', async ev => {
   if (t.dataset.submit === 'task') {
     const form = document.querySelector('[data-form="task"]');
     const payload = Object.fromEntries(new FormData(form));
-    payload.tab = t.dataset.tab === 'report' ? 'Report Calendar' : 'Staff Tracker';
+    // MIS submits the EXACT currently-selected register (state.misTab), not a loose
+    // hint — resolveTab() only exact-matches CONFIG.REPORT_SOURCES tab names, and a
+    // substring hint like "mis" would fall through to Staff Tracker instead.
+    payload.tab = t.dataset.tab === 'mis' ? state.misTab : t.dataset.tab === 'report' ? 'Report Calendar' : 'Staff Tracker';
     t.disabled = true;
     try {
       const res = await api('/api/tasks', { method: 'POST', body: JSON.stringify(payload) });
@@ -1408,6 +1469,9 @@ document.addEventListener('input', ev => {
 // --- boot ------------------------------------------------------------------
 state.health = await api('/api/health').catch(() => null);
 state.taskTypeOptions = (await api('/api/task-types').catch(() => ({ options: [] }))).options;
+// First configured MIS register is the default view of the combined tab. The list
+// comes from CONFIG.REPORT_SOURCES via /api/health, so it is never hardcoded here.
+state.misTab = state.health?.misSources?.[0]?.tab || null;
 await load(state.tab);
 </script>
 </body>
