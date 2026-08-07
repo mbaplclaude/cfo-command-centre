@@ -1,0 +1,41 @@
+name: Run CFO Agent Every Hour
+
+on:
+  schedule:
+    - cron: '0 * * * *'   # Every hour
+  workflow_dispatch:
+
+jobs:
+  run-agent:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Run CFO Agent
+        run: npm run agent
+        env:
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+          MIS_CHECKLIST_SHEET_ID: ${{ secrets.MIS_CHECKLIST_SHEET_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REDIRECT_URI: ${{ secrets.GMAIL_REDIRECT_URI }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPERATOR_EMAIL: ${{ secrets.OPERATOR_EMAIL }}
+          REPLY_FORWARD_EMAIL: ${{ secrets.REPLY_FORWARD_EMAIL }}
+          OWN_SENDER_EMAILS: ${{ secrets.OWN_SENDER_EMAILS }}
+          REQUIRE_APPROVAL: ${{ secrets.REQUIRE_APPROVAL }}
+          APPROVAL_TIMEOUT_HOURS: ${{ secrets.APPROVAL_TIMEOUT_HOURS }}
+          FINANCIAL_YEAR_START_MONTH: ${{ secrets.FINANCIAL_YEAR_START_MONTH }}
