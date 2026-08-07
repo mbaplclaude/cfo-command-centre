@@ -3,6 +3,8 @@
  * Kept separate from server.ts so it can be self-checked without booting a server.
  * Run the self-check with: npm run check:dashboard
  */
+import http from 'node:http';
+import { EventEmitter } from 'node:events';
 import { CONFIG } from '../src/config/index.js';
 import { UnifiedTask } from '../src/types/index.js';
 import { TASK_TYPE_OPTIONS } from '../src/util/task-type.js';
@@ -33,6 +35,143 @@ export function scalarText(value: unknown): string | null {
 /** Blank means "unspecified"; anything else must be one of the canonical options. */
 export function isAllowedTaskType(taskType: string): boolean {
   return taskType === '' || TASK_TYPE_OPTIONS.includes(taskType);
+}
+
+// ---------------------------------------------------------------------------
+// Request-body / write-path safety — moved here (from server.ts) so it can be
+// self-checked without booting a server, matching this file's own purpose.
+// ---------------------------------------------------------------------------
+
+/**
+ * The client's fault, and safe to echo back: validation messages the operator
+ * needs to see. Everything NOT of this type is treated as internal — logged in
+ * full server-side, reported to the client as a generic message.
+ *
+ * Raw exception text used to go straight to the client, which leaked Postgres
+ * connection errors and JS internals ("(input.emailId || \"\").trim is not a
+ * function") to anything that could reach the port.
+ */
+export class BadRequest extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BadRequest';
+  }
+}
+
+/** Longest request body this server will read before refusing it outright. */
+export const MAX_BODY_BYTES = 1_000_000;
+
+/**
+ * Read and JSON-parse a request body, capped at MAX_BODY_BYTES.
+ *
+ * Rejecting the returned Promise on an oversized body is NOT enough on its
+ * own — a Promise settling doesn't stop the underlying stream. Without the
+ * `done` guard and `req.destroy()` below, Node keeps emitting 'data' for every
+ * further byte the client sends after the cap is crossed, so `raw += chunk`
+ * (a fresh string allocation each time) kept growing in memory for as long as
+ * the client kept the connection open and kept sending bytes — an unbounded
+ * memory/CPU sink reachable by any authenticated caller on every POST route.
+ * `req.destroy()` actually stops the stream; `done` stops this function from
+ * reacting to whatever already-queued events fire on the way out.
+ */
+export function readBody(req: http.IncomingMessage): Promise<any> {
+  return new Promise((resolve, reject) => {
+    let raw = '';
+    let done = false;
+
+    req.on('data', chunk => {
+      if (done) return; // already rejected+destroyed — ignore anything still in flight
+      raw += chunk;
+      if (raw.length > MAX_BODY_BYTES) {
+        done = true;
+        reject(new BadRequest('Request body too large.'));
+        req.destroy(); // stop consuming the stream — the actual fix, not just the reject
+      }
+    });
+    req.on('end', () => {
+      if (done) return;
+      done = true;
+      let parsed: unknown;
+      try {
+        parsed = raw ? JSON.parse(raw) : {};
+      } catch {
+        return reject(new BadRequest('Invalid JSON body.'));
+      }
+      // Every route reads named fields off this, so anything that is not a plain
+      // object is rejected here rather than crashing on `body.tab` further in.
+      // `null` in particular used to produce a 500 reading a property of null.
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return reject(new BadRequest('Request body must be a JSON object.'));
+      }
+      resolve(parsed);
+    });
+    req.on('error', err => {
+      if (done) return;
+      done = true;
+      reject(err);
+    });
+  });
+}
+
+/**
+ * CSRF mitigation for state-changing (POST) requests.
+ *
+ * HTTP Basic Auth credentials are cached per-origin by the browser and resent
+ * AUTOMATICALLY on every request to that origin — including one triggered by a
+ * completely unrelated, malicious page (a hidden auto-submitting form, a
+ * fetch() with credentials included). There is no session cookie here to scope
+ * with SameSite, so passing Basic Auth proves nothing about who INITIATED the
+ * request. `Origin` is different: it is set by the browser itself and cannot
+ * be forged by page-level JavaScript, so a MISMATCHED Origin is real evidence
+ * of a cross-site request and is rejected. A MISSING Origin is allowed through
+ * — non-browser clients (curl, scripts) and some legitimate same-origin
+ * requests in older browsers don't send it, and there is nothing to check it
+ * against in that case.
+ */
+export function isAllowedOrigin(origin: string | undefined | null, expectedHost: string): boolean {
+  if (!origin) return true;
+  let originHost: string;
+  try {
+    originHost = new URL(origin).host; // "host" includes the port, matching the Host: header
+  } catch {
+    return false; // an Origin header that isn't even a valid URL is never legitimate
+  }
+  return originHost === expectedHost;
+}
+
+/**
+ * Hard cap on one manual staff-reminder send batch (POST /api/staff-reminders/send).
+ *
+ * Every item triggers a real, sequential Gmail send — unlike a read, this has a
+ * genuine per-item cost (a live API call) and an irreversible effect (mail
+ * sent). Every other batch-shaped operation in this codebase has an explicit
+ * ceiling (MAX_TEXT_LENGTH, the per-period digest cap, CHRONIC_REMINDER_CAP);
+ * this endpoint was the one exception, bounded in practice only by today's
+ * Staff Tracker row count and the request body's own MAX_BODY_BYTES cap —
+ * neither of which is a real limit if either grows.
+ */
+export const MAX_STAFF_DIGEST_BATCH = 50;
+
+export function isOversizedDigestBatch(count: number): boolean {
+  return count > MAX_STAFF_DIGEST_BATCH;
+}
+
+/**
+ * Split a decoded "user:password" Basic Auth credential on the FIRST colon
+ * only.
+ *
+ * `decoded.split(':')` followed by array destructuring keeps only the first
+ * two elements — for a password that itself contains a colon (a perfectly
+ * legitimate password character), "user:pass:word" decodes to
+ * ['user','pass','word'] and destructuring silently drops "word". That is a
+ * lockout of the real operator (their correct password never matches), not an
+ * attacker bypass — but still a real correctness bug worth a dedicated,
+ * pinned test rather than leaving it to be rediscovered by someone locked out.
+ */
+export function parseBasicAuthPair(decoded: string): { user: string; password: string } {
+  const idx = decoded.indexOf(':');
+  if (idx === -1) return { user: decoded, password: '' };
+  return { user: decoded.slice(0, idx), password: decoded.slice(idx + 1) };
 }
 
 export type Category = 'received' | 'early' | 'unclear' | 'overdue' | 'pending' | 'attention';
@@ -240,7 +379,7 @@ export function toDashboardTask(t: UnifiedTask) {
 // ---------------------------------------------------------------------------
 // Self-check
 // ---------------------------------------------------------------------------
-function demo() {
+async function demo() {
   const assert = (cond: boolean, msg: string) => {
     if (!cond) throw new Error(`FAIL: ${msg}`);
   };
@@ -369,9 +508,106 @@ function demo() {
   assert(cleaned.clean.taskDescription === 'Q3 GST recon', 'clean output is trimmed');
   assert(cleaned.clean.assignedTo === '42', 'numeric field coerced to text');
 
+  // --- readBody: an oversized body must stop the stream, not just reject once ---
+  // (the security-audit fix: rejecting the Promise alone left `raw += chunk`
+  // running forever on every further byte a client kept sending)
+  {
+    const fakeReq: any = new EventEmitter();
+    let destroyCalls = 0;
+    fakeReq.destroy = () => { destroyCalls++; };
+    const promise = readBody(fakeReq);
+
+    // Two 600KB chunks cross the 1MB cap on the second one; two more AFTER that
+    // simulate a client that keeps sending anyway — exactly the scenario that
+    // used to keep `raw` growing forever even after the Promise had rejected.
+    const chunk = Buffer.alloc(600_000, 'x');
+    fakeReq.emit('data', chunk); // 600KB — under the cap, no action yet
+    fakeReq.emit('data', chunk); // 1.2MB — crosses the cap: reject + destroy (call #1)
+    fakeReq.emit('data', chunk); // must be ignored by the `done` guard, not a 2nd destroy
+    fakeReq.emit('data', chunk); // must also be ignored
+    assert(destroyCalls === 1, 'oversized body: req.destroy() called exactly once — later chunks ignored, not reprocessed');
+    await promise.then(
+      () => assert(false, 'an oversized body must not resolve'),
+      err => assert(err instanceof BadRequest && /too large/.test(err.message), 'oversized body rejects as BadRequest with the expected message')
+    );
+  }
+  {
+    // A well-behaved small request must still resolve normally — the refactor
+    // that added the `done` guard must not have broken the ordinary path.
+    const fakeReq: any = new EventEmitter();
+    fakeReq.destroy = () => {};
+    const promise = readBody(fakeReq);
+    fakeReq.emit('data', Buffer.from('{"a":1}'));
+    fakeReq.emit('end');
+    const result = await promise;
+    assert(result.a === 1, 'a small valid JSON body still resolves normally');
+  }
+  {
+    const fakeReq: any = new EventEmitter();
+    fakeReq.destroy = () => {};
+    const promise = readBody(fakeReq);
+    fakeReq.emit('data', Buffer.from('not json'));
+    fakeReq.emit('end');
+    await promise.then(
+      () => assert(false, 'invalid JSON must not resolve'),
+      err => assert(err instanceof BadRequest && /Invalid JSON/.test(err.message), 'invalid JSON still rejected as BadRequest')
+    );
+  }
+  {
+    const fakeReq: any = new EventEmitter();
+    fakeReq.destroy = () => {};
+    const promise = readBody(fakeReq);
+    fakeReq.emit('data', Buffer.from('[1,2,3]'));
+    fakeReq.emit('end');
+    await promise.then(
+      () => assert(false, 'an array body must not resolve'),
+      err => assert(err instanceof BadRequest && /must be a JSON object/.test(err.message), 'array body still rejected — must be a plain object')
+    );
+  }
+
+  // --- isAllowedOrigin: CSRF check — only a MISMATCHED Origin is rejected ---
+  assert(isAllowedOrigin(undefined, 'dashboard.example.com'), 'no Origin header at all -> allowed (non-browser clients, some same-origin requests)');
+  assert(isAllowedOrigin(null, 'dashboard.example.com'), 'null Origin -> allowed');
+  assert(isAllowedOrigin('https://dashboard.example.com', 'dashboard.example.com'), 'matching origin (https, no port) -> allowed');
+  assert(isAllowedOrigin('http://localhost:4000', 'localhost:4000'), 'matching origin with a port -> allowed');
+  assert(!isAllowedOrigin('https://evil.example.com', 'dashboard.example.com'), 'mismatched origin -> rejected (the actual CSRF defense)');
+  assert(!isAllowedOrigin('http://localhost:4000', 'localhost:5000'), 'same host, different port -> rejected — host comparison includes the port');
+  assert(!isAllowedOrigin('not a url', 'dashboard.example.com'), 'an Origin header that is not even a valid URL -> rejected, not thrown on');
+
+  // --- isOversizedDigestBatch: the manual staff-reminder send cap ---
+  assert(!isOversizedDigestBatch(1), 'a single item is never oversized');
+  assert(!isOversizedDigestBatch(MAX_STAFF_DIGEST_BATCH), 'exactly the cap is still allowed');
+  assert(isOversizedDigestBatch(MAX_STAFF_DIGEST_BATCH + 1), 'one over the cap is rejected');
+  assert(isOversizedDigestBatch(10_000), 'a large batch is rejected');
+
+  // --- parseBasicAuthPair: split on the FIRST colon only ---
+  assert(
+    JSON.stringify(parseBasicAuthPair('user:pass')) === JSON.stringify({ user: 'user', password: 'pass' }),
+    'ordinary "user:pass" splits correctly'
+  );
+  assert(
+    JSON.stringify(parseBasicAuthPair('user:pass:word')) === JSON.stringify({ user: 'user', password: 'pass:word' }),
+    'a password containing a colon is kept whole, not truncated at the second colon — the actual bug this fixes'
+  );
+  assert(
+    JSON.stringify(parseBasicAuthPair('user:a:b:c')) === JSON.stringify({ user: 'user', password: 'a:b:c' }),
+    'multiple colons in the password all stay in the password'
+  );
+  assert(
+    JSON.stringify(parseBasicAuthPair('justauser')) === JSON.stringify({ user: 'justauser', password: '' }),
+    'no colon at all -> empty password, not a crash'
+  );
+  assert(
+    JSON.stringify(parseBasicAuthPair(':onlypassword')) === JSON.stringify({ user: '', password: 'onlypassword' }),
+    'empty user before the colon is preserved as empty, not dropped'
+  );
+
   console.log('✅ dashboard/logic.ts self-check passed');
 }
 
 if (process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('dashboard/logic.ts')) {
-  demo();
+  demo().catch(err => {
+    console.error(err);
+    process.exit(1);
+  });
 }

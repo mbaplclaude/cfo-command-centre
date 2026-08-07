@@ -27,7 +27,11 @@ import { EmployeeStatsAggregator } from '../src/stats/employee-stats.js';
 import { approveAndDispatchRun } from '../src/agent.js';
 import { CONFIG } from '../src/config/index.js';
 import { UnifiedTask } from '../src/types/index.js';
-import { categorize, resolveTab, resolveWriteTab, toDashboardTask, validateNewTask, scalarText, isAllowedTaskType, MAX_TEXT_LENGTH, NewTaskInput } from './logic.js';
+import {
+  categorize, resolveTab, resolveWriteTab, toDashboardTask, validateNewTask, scalarText, isAllowedTaskType,
+  MAX_TEXT_LENGTH, NewTaskInput, BadRequest, readBody, isAllowedOrigin, isOversizedDigestBatch,
+  MAX_STAFF_DIGEST_BATCH, parseBasicAuthPair,
+} from './logic.js';
 
 const PORT = Number(process.env.DASHBOARD_PORT || 4000);
 const HERE = __dirname;
@@ -64,8 +68,11 @@ function isAuthorized(req: http.IncomingMessage): boolean {
   const header = req.headers.authorization || '';
   const [scheme, encoded] = header.split(' ');
   if (scheme !== 'Basic' || !encoded) return false;
-  const [user, password] = Buffer.from(encoded, 'base64').toString('utf8').split(':');
-  return timingSafeStringEqual(user || '', DASHBOARD_USER) && timingSafeStringEqual(password || '', DASHBOARD_PASSWORD);
+  // parseBasicAuthPair, not a bare .split(':') destructure: a password
+  // containing a colon used to be silently truncated by keeping only the
+  // first two array elements — see its own doc comment.
+  const { user, password } = parseBasicAuthPair(Buffer.from(encoded, 'base64').toString('utf8'));
+  return timingSafeStringEqual(user, DASHBOARD_USER) && timingSafeStringEqual(password, DASHBOARD_PASSWORD);
 }
 
 const sheets = new GoogleSheetsClient();
@@ -76,21 +83,9 @@ const db = new DatabaseClient();
 
 // --- errors -----------------------------------------------------------------
 
-/**
- * The client's fault, and safe to echo back: validation messages the operator
- * needs to see. Everything NOT of this type is treated as internal — logged in
- * full server-side, reported to the client as a generic message.
- *
- * Raw exception text used to go straight to the client, which leaked Postgres
- * connection errors and JS internals ("(input.emailId || \"\").trim is not a
- * function") to anything that could reach the port.
- */
-class BadRequest extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'BadRequest';
-  }
-}
+// BadRequest itself now lives in dashboard/logic.ts (imported above), alongside
+// readBody — both moved there so they can be self-checked without booting a
+// server. See logic.ts for the class and its doc comment.
 
 const GENERIC_ERROR = 'Something went wrong processing this request — see the dashboard server log for details.';
 
@@ -203,32 +198,6 @@ async function readSheet(force = false): Promise<{ tasks: UnifiedTask[]; sourceE
 /** A credential still holding an .env.example placeholder is not configured. */
 function configured(value: string): boolean {
   return Boolean(value) && !/^your-|^postgresql:\/\/user:password@host/.test(value);
-}
-
-function readBody(req: http.IncomingMessage): Promise<any> {
-  return new Promise((resolve, reject) => {
-    let raw = '';
-    req.on('data', chunk => {
-      raw += chunk;
-      if (raw.length > 1_000_000) reject(new BadRequest('Request body too large.'));
-    });
-    req.on('end', () => {
-      let parsed: unknown;
-      try {
-        parsed = raw ? JSON.parse(raw) : {};
-      } catch {
-        return reject(new BadRequest('Invalid JSON body.'));
-      }
-      // Every route reads named fields off this, so anything that is not a plain
-      // object is rejected here rather than crashing on `body.tab` further in.
-      // `null` in particular used to produce a 500 reading a property of null.
-      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        return reject(new BadRequest('Request body must be a JSON object.'));
-      }
-      resolve(parsed);
-    });
-    req.on('error', reject);
-  });
 }
 
 // --- routes ----------------------------------------------------------------
@@ -884,6 +853,15 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
       if (digests.length === 0) {
         return { status: 400, body: { error: 'items must be a non-empty array.' } };
       }
+      // Each entry below triggers a real, sequential Gmail send — unlike a read,
+      // this has a genuine per-item cost and an irreversible effect. Capped the
+      // same way every other batch-shaped operation in this codebase already is.
+      if (isOversizedDigestBatch(digests.length)) {
+        return {
+          status: 400,
+          body: { error: `items must be ${MAX_STAFF_DIGEST_BATCH} or fewer per request (got ${digests.length}).` },
+        };
+      }
 
       const results: any[] = [];
       for (const digest of digests) {
@@ -1051,6 +1029,17 @@ const server = http.createServer(async (req, res) => {
       'WWW-Authenticate': 'Basic realm="CFO Command Centre", charset="UTF-8"',
     });
     return res.end(JSON.stringify({ error: 'Unauthorized.' }));
+  }
+
+  // CSRF mitigation: the browser resends cached Basic Auth credentials to this
+  // origin automatically from ANY page, including a hostile one — passing
+  // isAuthorized() above proves nothing about who INITIATED the request. Origin
+  // cannot be forged by page-level JS, so a mismatched one on a state-changing
+  // request is rejected here, independent of whether its credentials were
+  // valid. GETs are left alone — they don't change state, so there is nothing
+  // for a forged cross-site request to gain by sending one.
+  if (method === 'POST' && !isAllowedOrigin(req.headers.origin, req.headers.host || '')) {
+    return json(403, { error: 'Cross-origin request rejected.' });
   }
 
   // Match on path first, then method — several paths carry both a GET and a POST,
