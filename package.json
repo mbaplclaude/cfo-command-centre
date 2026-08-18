@@ -16,8 +16,11 @@
     "check:relevance": "tsx src/classifier/relevance.ts",
     "check:directory": "tsx src/db/directory.ts",
     "sync:directory": "tsx src/scripts/sync-directory.ts",
+    "summarize:attachments": "tsx src/scripts/summarize-attachments.ts",
     "check:legacy-status": "tsx src/classifier/legacy-status.ts",
     "check:parse-date": "tsx src/util/parse-date.ts",
+    "check:gemini-summarizer": "tsx src/classifier/gemini-summarizer.test.ts",
+    "check:chat": "tsx dashboard/chat.test.ts",
     "check:task-type": "tsx src/util/task-type.ts",
     "check:timebox": "tsx src/classifier/timebox.test.ts",
     "check:cadence": "tsx src/classifier/cadence.test.ts",
@@ -26,7 +29,7 @@
     "check:config": "tsx src/config/index.ts",
     "check:agent-guard": "tsx src/agent.ts --self-check",
     "check:types": "tsc -p tsconfig.check.json",
-    "check": "npm run check:types && npm run check:parse-date && npm run check:task-type && npm run check:timebox && npm run check:cadence && npm run check:write-scope && npm run check:llm-reasoner && npm run check:config && npm run check:agent-guard && npm run check:report-schedule && npm run check:relevance && npm run check:legacy-status && npm run check:directory && npm run check:dashboard",
+    "check": "npm run check:types && npm run check:parse-date && npm run check:gemini-summarizer && npm run check:chat && npm run check:task-type && npm run check:timebox && npm run check:cadence && npm run check:write-scope && npm run check:llm-reasoner && npm run check:config && npm run check:agent-guard && npm run check:report-schedule && npm run check:relevance && npm run check:legacy-status && npm run check:directory && npm run check:dashboard",
     "cleanup:drafts": "tsx src/scripts/cleanup-drafts.ts",
     "discard:run": "tsx src/scripts/discard-run.ts",
     "flag:legacy-status": "tsx src/scripts/flag-legacy-status.ts"
@@ -36,9 +39,11 @@
   "license": "ISC",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",
+    "@google/generative-ai": "^0.24.1",
     "dotenv": "^16.4.7",
     "googleapis": "^144.0.0",
-    "pg": "^8.13.3"
+    "pg": "^8.13.3",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@types/node": "^22.13.5",

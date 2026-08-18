@@ -1,0 +1,138 @@
+# Render Blueprint — the dashboard web service plus the two scheduled jobs.
+#
+# IMPORTANT: this file only drives Render if the services are managed as a
+# Blueprint (New > Blueprint, pointed at this repo). Services created by hand in
+# the Render dashboard IGNORE it — for those, add the cron job through the UI
+# using the values below, which is what this file then documents.
+#
+# Every secret is marked `sync: false`: Render prompts for the value once and
+# stores it encrypted, so no key is ever committed here. Set them in the Render
+# dashboard under each service's Environment tab.
+
+services:
+  - type: web
+    name: cfo-command-centre-dashboard
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    # Binds 0.0.0.0 and reads Render's own $PORT via DASHBOARD_PORT below.
+    startCommand: npx tsx dashboard/server.ts
+    healthCheckPath: /api/health
+    envVars:
+      - key: DASHBOARD_PORT
+        fromService:
+          type: web
+          name: cfo-command-centre-dashboard
+          property: port
+      # Basic Auth is the only thing in front of routes that can send mail and
+      # write the live Sheet. Both are required or the server refuses to start.
+      - key: DASHBOARD_USER
+        sync: false
+      - key: DASHBOARD_PASSWORD
+        sync: false
+      - key: GOOGLE_SHEET_ID
+        sync: false
+      - key: MIS_CHECKLIST_SHEET_ID
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: GMAIL_CLIENT_ID
+        sync: false
+      - key: GMAIL_CLIENT_SECRET
+        sync: false
+      - key: GMAIL_REDIRECT_URI
+        sync: false
+      - key: GMAIL_REFRESH_TOKEN
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPERATOR_EMAIL
+        sync: false
+      - key: REPLY_FORWARD_EMAIL
+        sync: false
+      - key: OWN_SENDER_EMAILS
+        sync: false
+      - key: REQUIRE_APPROVAL
+        value: "true"
+      - key: APPROVAL_TIMEOUT_HOURS
+        value: "4"
+      - key: FINANCIAL_YEAR_START_MONTH
+        value: "4"
+
+  # ---------------------------------------------------------------------------
+  # Job 1 — the hourly pipeline. Reads Sheets + Gmail, classifies submissions,
+  # drafts reminders. REQUIRE_APPROVAL=true keeps it from ever SENDING unattended.
+  # ---------------------------------------------------------------------------
+  - type: cron
+    name: cfo-agent-hourly
+    runtime: node
+    plan: starter
+    schedule: "0 * * * *"
+    buildCommand: npm install
+    startCommand: npm run agent -- --reports-only
+    envVars:
+      - key: GOOGLE_SHEET_ID
+        sync: false
+      - key: MIS_CHECKLIST_SHEET_ID
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: GMAIL_CLIENT_ID
+        sync: false
+      - key: GMAIL_CLIENT_SECRET
+        sync: false
+      - key: GMAIL_REDIRECT_URI
+        sync: false
+      - key: GMAIL_REFRESH_TOKEN
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPERATOR_EMAIL
+        sync: false
+      - key: REPLY_FORWARD_EMAIL
+        sync: false
+      - key: OWN_SENDER_EMAILS
+        sync: false
+      - key: REQUIRE_APPROVAL
+        value: "true"
+      - key: APPROVAL_TIMEOUT_HOURS
+        value: "4"
+      - key: FINANCIAL_YEAR_START_MONTH
+        value: "4"
+
+  # ---------------------------------------------------------------------------
+  # Job 2 — the daily 9 AM Excel attachment summariser. Downloads .xlsx files
+  # from submissions matched in the last 24h, reads their contents, and stores a
+  # Gemini summary. Sends no mail and never writes to the Google Sheet, so it
+  # needs no Sheets credentials — only Gmail (to download) and Postgres (to store).
+  #
+  # SCHEDULE IS UTC. "30 3 * * *" = 03:30 UTC = 09:00 IST, matching the Windows
+  # task's local 9 AM. Do NOT "correct" this to "0 9 * * *" — that is 09:00 UTC,
+  # which lands at 14:30 IST.
+  # ---------------------------------------------------------------------------
+  - type: cron
+    name: cfo-attachment-summarizer-daily
+    runtime: node
+    plan: starter
+    schedule: "30 3 * * *"
+    buildCommand: npm install
+    startCommand: npm run summarize:attachments
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: GMAIL_CLIENT_ID
+        sync: false
+      - key: GMAIL_CLIENT_SECRET
+        sync: false
+      - key: GMAIL_REDIRECT_URI
+        sync: false
+      - key: GMAIL_REFRESH_TOKEN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false

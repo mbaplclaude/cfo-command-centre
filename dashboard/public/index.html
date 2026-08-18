@@ -193,6 +193,53 @@
   .ccc-tasktype-select { font: inherit; font-size: 12px; padding: 4px 8px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--ink-2); }
   .ccc-tasktype-select:disabled { opacity: 0.6; }
 
+
+  /* ---------- AI Assistant ---------- */
+  /* One set of bubble/composer rules serves both the full tab and the floating
+     widget — the widget only constrains the height, so the two can never drift
+     into looking like different products. */
+  .ccc-chat { display: flex; flex-direction: column; gap: 14px; }
+  .ccc-chat-log { display: flex; flex-direction: column; gap: 12px; overflow-y: auto; padding: 4px 2px; }
+  .ccc-chat-tab .ccc-chat-log { min-height: 46vh; max-height: 58vh; }
+  .ccc-msg { display: flex; flex-direction: column; max-width: 78%; gap: 3px; }
+  .ccc-msg-user { align-self: flex-end; align-items: flex-end; }
+  .ccc-msg-assistant { align-self: flex-start; align-items: flex-start; }
+  /* pre-wrap, not <br> substitution: replies are plain text by instruction, and
+     pre-wrap preserves their paragraph breaks without any markup being injected
+     into the escaped string. */
+  .ccc-bubble { padding: 10px 14px; border-radius: 14px; font-size: 13.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; border: 1px solid var(--hairline); }
+  .ccc-msg-user .ccc-bubble { background: var(--accent); border-color: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+  .ccc-msg-assistant .ccc-bubble { background: var(--surface-2); color: var(--ink); border-bottom-left-radius: 4px; }
+  .ccc-msg-time { font-size: 11px; color: var(--ink-muted); padding: 0 4px; }
+  .ccc-chat-composer { display: flex; gap: 8px; align-items: flex-end; }
+  .ccc-chat-input { flex: 1; font: inherit; font-size: 13.5px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--ink); resize: none; line-height: 1.5; max-height: 120px; }
+  .ccc-chat-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; background: var(--surface); }
+  .ccc-suggests { display: flex; flex-wrap: wrap; gap: 8px; }
+  .ccc-suggest { appearance: none; text-align: left; border: 1px solid var(--hairline); background: var(--surface-2); color: var(--ink-2); padding: 8px 12px; border-radius: 999px; font-size: 12.5px; }
+  .ccc-suggest:hover { color: var(--ink); border-color: var(--accent); background: var(--accent-wash); }
+  /* Three dots, staggered — a spinner would not say "it is composing an answer". */
+  .ccc-typing { display: inline-flex; gap: 4px; align-items: center; padding: 2px 0; }
+  .ccc-typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-muted); display: block; animation: ccc-blink 1.2s infinite ease-in-out; }
+  .ccc-typing i:nth-child(2) { animation-delay: 0.18s; }
+  .ccc-typing i:nth-child(3) { animation-delay: 0.36s; }
+  @keyframes ccc-blink { 0%, 60%, 100% { opacity: 0.25; } 30% { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .ccc-typing i { animation: none; opacity: 0.6; } }
+
+  /* ---------- floating chat widget ---------- */
+  .ccc-fab { position: fixed; right: 22px; bottom: 22px; z-index: 60; width: 52px; height: 52px; border-radius: 50%; border: 1px solid var(--hairline); background: var(--accent); color: #fff; font-size: 21px; box-shadow: var(--shadow-md); display: flex; align-items: center; justify-content: center; }
+  .ccc-fab:hover { box-shadow: var(--shadow-lg); }
+  .ccc-widget { position: fixed; right: 22px; bottom: 84px; z-index: 60; width: 400px; height: 500px; max-width: calc(100vw - 32px); max-height: calc(100vh - 120px); background: var(--surface); border: 1px solid var(--hairline); border-radius: 14px; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; overflow: hidden; animation: ccc-slideup 0.18s cubic-bezier(.4,0,.2,1); }
+  @keyframes ccc-slideup { from { transform: translateY(12px); opacity: 0; } to { transform: none; opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) { .ccc-widget { animation: none; } }
+  .ccc-widget-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--hairline); background: var(--surface-2); }
+  .ccc-widget-head b { font-size: 13.5px; }
+  .ccc-widget-close { appearance: none; border: 0; background: none; color: var(--ink-muted); font-size: 18px; line-height: 1; padding: 2px 6px; border-radius: 6px; }
+  .ccc-widget-close:hover { color: var(--ink); background: var(--wash); }
+  .ccc-widget .ccc-chat { flex: 1; min-height: 0; padding: 12px 14px 14px; gap: 10px; }
+  .ccc-widget .ccc-chat-log { flex: 1; min-height: 0; }
+  .ccc-widget .ccc-msg { max-width: 88%; }
+  .ccc-widget .ccc-bubble { font-size: 13px; padding: 8px 12px; }
+
   .ccc-modal-backdrop { position: fixed; inset: 0; background: rgba(15,17,21,0.5); backdrop-filter: blur(1px); z-index: 100; display: flex; align-items: flex-start; justify-content: center; padding: 6vh 16px; overflow-y: auto; }
   .ccc-modal { background: var(--surface); border-radius: 14px; padding: 26px 28px 22px; width: 100%; max-width: 620px; box-shadow: var(--shadow-lg); }
   .ccc-modal-wide { max-width: 780px; }
@@ -241,7 +288,7 @@
     <div class="ccc-brand"><span class="ccc-mark">CC</span> CFO Command Centre</div>
     <div class="ccc-search">
       <span class="ccc-search-icon">⌕</span>
-      <input type="text" placeholder="Search tasks, employees, threads…" />
+      <input type="text" id="ccc-search-input" placeholder="Search tasks, employees, threads…" />
     </div>
     <div class="ccc-meta" id="ccc-health"></div>
     <button class="ccc-theme-toggle" id="ccc-theme-toggle" type="button">🌙 Dark mode</button>
@@ -254,6 +301,7 @@
   <main class="ccc-panel" id="ccc-panel"></main>
 </div>
 <div id="ccc-modal-root"></div>
+<div id="ccc-chat-root"></div>
 
 <script type="module">
 // ---------------------------------------------------------------------------
@@ -286,11 +334,29 @@ const TABS = [
   { id: 'mis',       label: 'MIS Checklist',    icon: '🧾' },
   { id: 'directory', label: 'Directory',        icon: '👥' },
   { id: 'monitor',   label: 'Employee Monitor', icon: '📈' },
+  // Last tab, and the only one that writes nothing and reads no Sheet on load.
+  { id: 'assistant', label: 'AI Assistant',     icon: '🤖' },
 ];
 
 const state = {
   tab: 'staff',
+  // AI Assistant. One conversation object drives BOTH the dedicated tab and the
+  // floating widget — they are two views of the same session, never two chats.
+  chat: {
+    messages: [],        // [{role, content, createdAt}]
+    draft: '',           // in-flight text, preserved across re-renders
+    sending: false,
+    loaded: false,       // this session's retained history has been fetched
+    loadingHistory: false,
+    widgetOpen: false,
+    focus: null,         // 'tab' | 'widget' — which composer to hand focus back to
+    error: null,
+    warning: null,
+  },
   monitorView: 'stats',
+  // Top-nav search — filters the current tab's task list in real time.
+  // Matched against task/report name, assigned-to name, and email.
+  search: '',
   // Which MIS register the combined tab is showing. Set at boot from
   // /api/health's misSources (i.e. from CONFIG.REPORT_SOURCES), never hardcoded.
   misTab: null,
@@ -348,6 +414,13 @@ el('ccc-theme-toggle').addEventListener('click', () => {
   document.documentElement.setAttribute('data-theme', next);
   localStorage.setItem(THEME_KEY, next);
   setThemeToggleLabel(next);
+});
+
+// Search input lives in the top nav, outside the panel render() rebuilds, so
+// typing never loses focus or cursor position.
+el('ccc-search-input').addEventListener('input', ev => {
+  state.search = ev.target.value;
+  render();
 });
 
 async function api(path, options) {
@@ -480,6 +553,10 @@ async function load(tab, { refresh = false } = {}) {
       ]);
       state.data[tab] = { tasks: tasks.tasks, tab: tasks.tab, attention: attention.rows, sheetWarning: tasks.sheetWarning };
       state.data.directory = directory;
+    } else if (tab === 'assistant') {
+      // No Sheet and no DB read here: the tab renders from state.chat, and the
+      // conversation is fetched once by loadChatHistory().
+      await loadChatHistory();
     } else if (tab === 'directory') {
       state.data.directory = await api('/api/directory');
     } else if (tab === 'monitor') {
@@ -496,10 +573,189 @@ async function load(tab, { refresh = false } = {}) {
 }
 
 // --- views -----------------------------------------------------------------
+
+// --- AI Assistant -----------------------------------------------------------
+
+/**
+ * The starter questions shown when a conversation is empty. Deliberately phrased
+ * as things a CFO actually asks, not as a feature list — each one exercises a
+ * different context block (sheet status, submissions, a named sheet, an
+ * attachment summary), so a first-time user learns the range by using it.
+ */
+const CHAT_SUGGESTIONS = [
+  'Show me all overdue reports',
+  'Summarize the latest submission from Amarjyoti',
+  "What's the status of the MIS Monthly sheet?",
+  'Give me a CFO brief on the Budget Comparison attachment',
+];
+
+/**
+ * sessionStorage, not localStorage: the conversation is a working session, and
+ * closing the tab should end it. The server deletes anything older than 24 hours
+ * anyway, so a long-lived id would only ever point at rows that no longer exist.
+ */
+function chatSessionId() {
+  let id = sessionStorage.getItem('ccc-chat-session');
+  if (!id) {
+    id = crypto.randomUUID();
+    sessionStorage.setItem('ccc-chat-session', id);
+  }
+  return id;
+}
+
+/** Load this session's retained history once, then keep it in memory. */
+async function loadChatHistory() {
+  if (state.chat.loaded || state.chat.loadingHistory) return;
+  state.chat.loadingHistory = true;
+  try {
+    const res = await api(`/api/chat?sessionId=${encodeURIComponent(chatSessionId())}`);
+    state.chat.messages = res.messages || [];
+    state.chat.warning = res.dbWarning || null;
+  } catch (err) {
+    state.chat.warning = `Could not load earlier messages: ${err.message}`;
+  } finally {
+    state.chat.loaded = true;
+    state.chat.loadingHistory = false;
+    render();
+  }
+}
+
+/**
+ * Send one turn. The user's message is shown immediately and the reply appended
+ * when it lands — both are also persisted server-side, so a reload inside the
+ * same session shows the same conversation.
+ */
+async function sendChat(text) {
+  const message = (text || '').trim();
+  if (!message || state.chat.sending) return;
+
+  state.chat.messages.push({ role: 'user', content: message, createdAt: new Date().toISOString() });
+  state.chat.sending = true;
+  state.chat.draft = '';
+  state.chat.error = null;
+  render();
+
+  try {
+    const res = await api('/api/chat', {
+      method: 'POST',
+      body: JSON.stringify({ message, sessionId: chatSessionId() }),
+    });
+    state.chat.messages.push({ role: 'assistant', content: res.reply, createdAt: new Date().toISOString() });
+  } catch (err) {
+    // The optimistic user bubble stays: it was really sent, and removing it would
+    // make the failure look like the question was never asked.
+    state.chat.error = err.body?.error || err.message;
+  } finally {
+    state.chat.sending = false;
+    render();
+  }
+}
+
+/** Message bubbles + typing indicator. Shared by the tab and the widget. */
+function chatLog(idSuffix) {
+  const c = state.chat;
+  const bubbles = c.messages.map(m => `
+    <div class="ccc-msg ccc-msg-${m.role === 'assistant' ? 'assistant' : 'user'}">
+      <div class="ccc-bubble">${esc(m.content)}</div>
+      <div class="ccc-msg-time">${fmtDate(m.createdAt)}</div>
+    </div>`).join('');
+
+  const typing = c.sending
+    ? `<div class="ccc-msg ccc-msg-assistant"><div class="ccc-bubble"><span class="ccc-typing"><i></i><i></i><i></i></span></div></div>`
+    : '';
+
+  const empty = !c.messages.length && !c.sending
+    ? `<div class="ccc-empty">${c.loaded ? 'Ask a question about tasks, reports, submissions or attachments.' : 'Loading…'}</div>`
+    : '';
+
+  return `<div class="ccc-chat-log" data-chat-log="${idSuffix}">${empty}${bubbles}${typing}</div>`;
+}
+
+/** Starter questions — only while there is nothing to read yet. */
+function chatSuggestions() {
+  if (state.chat.messages.length || state.chat.sending) return '';
+  return `<div class="ccc-suggests">
+    ${CHAT_SUGGESTIONS.map(q => `<button type="button" class="ccc-suggest" data-chat-suggest="${esc(q)}">${esc(q)}</button>`).join('')}
+  </div>`;
+}
+
+function chatComposer(idSuffix) {
+  const c = state.chat;
+  return `
+    ${c.error ? `<p class="ccc-note ccc-note-bad">${esc(c.error)}</p>` : ''}
+    <form class="ccc-chat-composer" data-chat-form="${idSuffix}">
+      <textarea class="ccc-chat-input" data-chat-input="${idSuffix}" rows="1" placeholder="Ask about tasks, reports, submissions…"
+                ${c.sending ? 'disabled' : ''}>${esc(c.draft)}</textarea>
+      <button class="ccc-btn" type="submit" ${c.sending ? 'disabled' : ''}>${c.sending ? 'Thinking…' : 'Send'}</button>
+    </form>`;
+}
+
+function assistantView() {
+  return `
+    <div class="ccc-pagehead">
+      <h1>AI Assistant</h1>
+      <p>Ask about task and report status, who has submitted what, and what arrived in the attachments already summarised by the pipeline. Answers come from stored data only — no live mailbox is searched. Conversations are kept for 24 hours.</p>
+    </div>
+    ${warnBox(state.chat.warning)}
+    <section class="ccc-card ccc-chat-tab">
+      <div class="ccc-chat">
+        ${chatSuggestions()}
+        ${chatLog('tab')}
+        ${chatComposer('tab')}
+      </div>
+    </section>`;
+}
+
+/** The floating bubble + slide-up panel, available on every tab. */
+function renderChatWidget() {
+  const root = el('ccc-chat-root');
+  // Hidden on the dedicated tab — two live copies of the same conversation on
+  // one screen is noise, not availability.
+  if (state.tab === 'assistant') { root.innerHTML = ''; return; }
+
+  root.innerHTML = `
+    ${state.chat.widgetOpen ? `
+      <div class="ccc-widget" role="dialog" aria-label="AI Assistant">
+        <div class="ccc-widget-head">
+          <b>🤖 AI Assistant</b>
+          <button class="ccc-widget-close" type="button" data-chat-close aria-label="Close">×</button>
+        </div>
+        <div class="ccc-chat">
+          ${chatSuggestions()}
+          ${chatLog('widget')}
+          ${chatComposer('widget')}
+        </div>
+      </div>` : ''}
+    <button class="ccc-fab" type="button" data-chat-toggle aria-label="${state.chat.widgetOpen ? 'Close' : 'Open'} AI Assistant" aria-expanded="${state.chat.widgetOpen}">${state.chat.widgetOpen ? '×' : '💬'}</button>`;
+}
+
+/**
+ * Keep the newest message in view, and hand focus back to whichever composer is
+ * live — render() rebuilds both, so without this every keystroke after a send
+ * would land nowhere.
+ */
+function restoreChatFocus() {
+  document.querySelectorAll('[data-chat-log]').forEach(log => { log.scrollTop = log.scrollHeight; });
+  const key = state.chat.focus;
+  if (!key || state.chat.sending) return;
+  const box = document.querySelector(`[data-chat-input="${key}"]`);
+  if (box) {
+    box.focus();
+    box.setSelectionRange(box.value.length, box.value.length);
+  }
+}
+
 function taskView(tabId) {
   const d = state.data[tabId];
   if (!d) return '';
-  const tasks = d.tasks || [];
+  const needle = state.search.trim().toLowerCase();
+  const tasks = needle
+    ? (d.tasks || []).filter(t =>
+        (t.taskDescription || '').toLowerCase().includes(needle) ||
+        (t.assignedTo || '').toLowerCase().includes(needle) ||
+        (t.emailId || '').toLowerCase().includes(needle)
+      )
+    : (d.tasks || []);
   const attention = (d.attention || []).filter(r => r.tabName === d.tab);
   const counts = tasks.reduce((acc, t) => ({ ...acc, [t.category]: (acc[t.category] || 0) + 1 }), {});
   // The MIS registers use Report Calendar's column layout exactly, so they render
@@ -542,7 +798,7 @@ function taskView(tabId) {
           <div class="ccc-primary">${esc(t.assignedTo || '—')}</div>
           <div class="ccc-sub">${esc(t.emailId)}</div>
         </td>
-        <td>${isReport ? esc(t.dueDate || '—') : `${esc(t.dateAssigned || '—')}<div class="ccc-sub">due ${esc(t.dueDate || '—')}</div>`}</td>
+        <td>${isReport ? esc(t.dueDateDisplay || '—') : `${esc(t.dateAssignedDisplay || '—')}<div class="ccc-sub">due ${esc(t.dueDateDisplay || '—')}</div>`}</td>
         <td>${badge(t.category)}<div class="ccc-sub">${esc(t.status || 'Pending')}</div></td>
         <td>${mailCell(t.mail)}</td>
         <td class="ccc-num">${esc(t.days || '—')}</td>
@@ -597,7 +853,7 @@ function taskView(tabId) {
             <th>${isReport ? 'Review timing' : 'Assigned / due'}</th><th>Status</th><th>Mail sent</th><th class="ccc-num">${isReport ? 'Overdue' : 'Days'}</th>
           </tr></thead>
           <tbody>${rows}</tbody>
-        </table>` : `<div class="ccc-empty">No valid rows on this tab yet. Add one below, or check that the service account can read the Sheet.</div>`}
+        </table>` : needle ? `<div class="ccc-empty">No rows match “${esc(state.search.trim())}”.</div>` : `<div class="ccc-empty">No valid rows on this tab yet. Add one below, or check that the service account can read the Sheet.</div>`}
       </div>
     </section>
 
@@ -663,6 +919,15 @@ function agentDetail(t) {
         ? `<b>Attachments:</b> ${attachmentLinks(sub.attachments)}`
         : `<b>Attachments:</b> none on the matched email`
     );
+
+    // Generated once by the pipeline when this submission was matched and cached
+    // in submissions.attachment_summary, so it arrives with /api/tasks — nothing
+    // is fetched or generated on expand. Absent (no GEMINI_API_KEY, no
+    // attachments, or the call failed) renders nothing at all, never a
+    // placeholder for a summary that may never exist.
+    if (sub.attachmentSummary) {
+      rows.push(`<b>Attachment Summary:</b> ${esc(sub.attachmentSummary)}`);
+    }
   }
 
   if (thread) {
@@ -973,6 +1238,7 @@ function render() {
   if (state.error) body = `<section class="ccc-card"><h2>Could not load</h2><p class="ccc-note ccc-note-bad">${esc(state.error)}</p>
     <p class="ccc-note">Task views read the Google Sheet directly — check that <code>service-account.json</code> exists and the Sheet is shared with it.</p></section>`;
   else if (state.loading && !state.data[state.tab]) body = `<section class="ccc-card"><div class="ccc-empty">Loading…</div></section>`;
+  else if (state.tab === 'assistant') body = assistantView();
   else if (state.tab === 'directory') body = directoryView();
   else if (state.tab === 'monitor') body = monitorView();
   else body = taskView(state.tab);
@@ -985,6 +1251,8 @@ function render() {
   ddItems = [];
 
   renderStaffSendModal();
+  renderChatWidget();
+  restoreChatFocus();
 }
 
 /**
@@ -1464,6 +1732,62 @@ document.addEventListener('input', ev => {
   }
   // No render() here — these inputs already reflect the keystroke; re-rendering
   // the whole modal would rebuild the textarea and jump the cursor to the end.
+});
+
+// --- AI Assistant events ----------------------------------------------------
+// Delegated, like every other handler here: the composer lives inside markup
+// render() rebuilds, so a directly-bound listener would die on the first render.
+
+document.addEventListener('click', ev => {
+  const toggle = ev.target.closest('[data-chat-toggle]');
+  if (toggle) {
+    state.chat.widgetOpen = !state.chat.widgetOpen;
+    if (state.chat.widgetOpen) { state.chat.focus = 'widget'; loadChatHistory(); }
+    render(); // render() restores focus and scroll for whichever composer is now live
+    return;
+  }
+
+  if (ev.target.closest('[data-chat-close]')) {
+    state.chat.widgetOpen = false;
+    render();
+    return;
+  }
+
+  const suggest = ev.target.closest('[data-chat-suggest]');
+  if (suggest) {
+    state.chat.focus = suggest.closest('.ccc-widget') ? 'widget' : 'tab';
+    sendChat(suggest.dataset.chatSuggest);
+  }
+});
+
+document.addEventListener('submit', ev => {
+  const form = ev.target.closest('[data-chat-form]');
+  if (!form) return;
+  ev.preventDefault();
+  const key = form.dataset.chatForm;
+  state.chat.focus = key;
+  sendChat(form.querySelector('[data-chat-input]')?.value);
+});
+
+// Draft is mirrored into state so switching between the tab and the widget (or
+// any re-render) doesn't discard a half-typed question.
+document.addEventListener('input', ev => {
+  const box = ev.target.closest('[data-chat-input]');
+  if (!box) return;
+  state.chat.draft = box.value;
+  state.chat.focus = box.dataset.chatInput;
+  // No render() — the textarea already shows the keystroke, and rebuilding it
+  // would move the caret to the end mid-sentence.
+});
+
+// Enter sends, Shift+Enter breaks the line — a textarea, not an input, precisely
+// so a long question can be composed over several lines.
+document.addEventListener('keydown', ev => {
+  const box = ev.target.closest('[data-chat-input]');
+  if (!box || ev.key !== 'Enter' || ev.shiftKey) return;
+  ev.preventDefault();
+  state.chat.focus = box.dataset.chatInput;
+  sendChat(box.value);
 });
 
 // --- boot ------------------------------------------------------------------

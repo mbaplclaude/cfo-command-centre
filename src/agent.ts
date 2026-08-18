@@ -661,6 +661,19 @@ class CFOAgent {
       console.log('\n🎉 No overdue reminders needed for this run.');
     }
 
+    // Chat retention. The AI Assistant's conversations are a rolling 24-hour
+    // window, not an archive - this is the only thing that enforces that, so it
+    // runs on every live pipeline run regardless of what the run above did.
+    // Best-effort: a failed cleanup must never fail a run that already sent mail.
+    // (Not run on --dry-run, which returns above - a dry run performs zero writes
+    // by definition, and a DELETE is a write.)
+    try {
+      const purged = await db.query(`DELETE FROM chat_messages WHERE created_at < NOW() - INTERVAL '24 hours'`);
+      if (purged?.rowCount) console.log(`   └─ Purged ${purged.rowCount} chat message(s) older than 24 hours.`);
+    } catch (err: any) {
+      console.warn(`   ⚠️ Chat history cleanup failed (${err.message}) - old conversations remain until the next run.`);
+    }
+
     console.log('\n✅ CFO Agent Execution Complete.\n');
   }
 

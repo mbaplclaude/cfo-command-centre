@@ -23,9 +23,6 @@ export const NO_MAIL_TASK_TYPE = 'No Mail Sent';
  */
 export const TASK_TYPE_OPTIONS = [
   'One-time',
-  'Routine',
-  'Report',
-  'Improvement',
   'Daily',
   'Weekly',
   'Monthly',
@@ -105,7 +102,8 @@ function demo() {
 
   // Every selectable option must itself normalise cleanly — a value the dropdown
   // offers that normaliseTaskType can't make sense of would be a silent bug.
-  assert(TASK_TYPE_OPTIONS.length === 10, 'canonical option count is 10');
+  assert(TASK_TYPE_OPTIONS.length === 7, 'canonical option count is 7');
+  assert(!TASK_TYPE_OPTIONS.includes('Routine') && !TASK_TYPE_OPTIONS.includes('Report') && !TASK_TYPE_OPTIONS.includes('Improvement'), 'Routine/Report/Improvement are no longer selectable');
   assert(TASK_TYPE_OPTIONS.includes('Daily') && TASK_TYPE_OPTIONS.includes('Monthly'), 'cadence options present');
   assert(TASK_TYPE_OPTIONS.includes('Yearly'), 'Yearly is selectable');
   assert(TASK_TYPE_OPTIONS.includes(NO_MAIL_TASK_TYPE), '"No Mail Sent" is selectable');

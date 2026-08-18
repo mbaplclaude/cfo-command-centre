@@ -84,6 +84,27 @@ export function parseSheetDate(dateStr: string): Date {
   return new Date(normaliseYear(n[2]), month - 1, day);
 }
 
+const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * Render Sheet date text as DD-Mon-YY for display, regardless of which of the
+ * formats above it arrived in. Purely cosmetic — the caller's own copy of the
+ * text (for writes back to the Sheet) is untouched.
+ *
+ * Text that isn't a date at all (e.g. Report Calendar's free-text "review
+ * timing" column, "Morning (8:00 AM)") is returned unchanged rather than
+ * forced through a parser that would only mangle it.
+ */
+export function formatDisplayDate(dateStr: string): string {
+  const raw = (dateStr || '').trim();
+  if (!raw) return '';
+  const d = parseSheetDate(raw);
+  if (isNaN(d.getTime())) return raw;
+  const day = String(d.getDate()).padStart(2, '0');
+  const year = String(d.getFullYear()).slice(-2);
+  return `${day}-${MONTH_ABBR[d.getMonth()]}-${year}`;
+}
+
 // ---------------------------------------------------------------------------
 // Self-check
 // ---------------------------------------------------------------------------
@@ -128,6 +149,14 @@ function demo() {
   assert(isNaN(parseSheetDate('Morning (8:00 AM)').getTime()), 'review-timing text is not a date');
   assert(isNaN(parseSheetDate('not-a-date-at-all').getTime()), 'garbage -> Invalid Date');
   assert(isNaN(parseSheetDate('21-Xyz-26').getTime()), 'unknown month name -> Invalid Date');
+
+  // --- display formatting ---
+  assert(formatDisplayDate('6/1/2026') === '06-Jan-26', '"6/1/2026" reads day-first, displays as 06-Jan-26');
+  assert(formatDisplayDate('2026-07-28') === '28-Jul-26', '"2026-07-28" displays as 28-Jul-26');
+  assert(formatDisplayDate('13/07/2026') === '13-Jul-26', '"13/07/2026" displays as 13-Jul-26');
+  assert(formatDisplayDate('17-Jun-26') === '17-Jun-26', 'already-formatted date is stable');
+  assert(formatDisplayDate('') === '', 'blank stays blank');
+  assert(formatDisplayDate('Morning (8:00 AM)') === 'Morning (8:00 AM)', 'non-date text passes through unchanged');
 
   console.log('✅ src/util/parse-date.ts self-check passed');
 }

@@ -80,7 +80,7 @@ $settings = New-ScheduledTaskSettingsSet `
 $principal = New-ScheduledTaskPrincipal -UserId $RunAsUser -LogonType S4U -RunLevel Limited
 
 if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
-    Write-Host "Existing task found — updating it."
+    Write-Host "Existing task found - updating it."
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
 }
 
@@ -93,7 +93,7 @@ Register-ScheduledTask `
     -Description 'Hourly CFO Command Centre agent run. Reads Sheets + Gmail, classifies submissions, drafts reminders. Never sends without manual approval (REQUIRE_APPROVAL=true).' | Out-Null
 
 Write-Host ""
-Write-Host "✅ Registered '$TaskName'."
+Write-Host "[OK] Registered '$TaskName'."
 Write-Host "   First run   : $($startAt.ToString('yyyy-MM-dd HH:mm'))"
 Write-Host "   Then        : every $IntervalHours hour(s)"
 Write-Host "   Logs        : $projectRoot\logs\agent-<date>.log"

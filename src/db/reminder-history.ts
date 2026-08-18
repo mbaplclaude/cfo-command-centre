@@ -13,6 +13,7 @@
 import { DatabaseClient } from './client.js';
 import { DraftReminderItem } from '../channels/interface.js';
 import { CHRONIC_REMINDER_CAP } from '../classifier/cadence.js';
+import { summarizeAttachment } from '../classifier/gemini-summarizer.js';
 
 /**
  * How many reminders were drafted or sent for each row today, keyed by
@@ -91,6 +92,17 @@ export function reminderKey(tabName: string, rowIndex: number): string {
  * Record a matched submission so the dashboard can link to its Gmail thread and
  * attachments. The Sheet has nowhere to put attachment metadata, so this table is
  * the only place that information can live.
+ *
+ * This is also where the attachment summary is generated — exactly once, at the
+ * moment a submission is matched. Doing it here rather than at each call site
+ * covers both writers (the pipeline in agent.ts and the dashboard's Task Type
+ * re-evaluation) from one place, and this function already receives the only
+ * three inputs the summariser needs: subject, snippet and filenames.
+ *
+ * The summary is best-effort by construction: summarizeAttachment() returns null
+ * for a missing GEMINI_API_KEY, an attachment-less email or a failed call, and
+ * that null is simply stored, leaving the dashboard to show nothing. A summary is
+ * never allowed to be the reason a submission goes unrecorded.
  */
 export async function recordSubmission(
   db: DatabaseClient,
@@ -109,12 +121,20 @@ export async function recordSubmission(
   }
 ): Promise<{ error?: string }> {
   if (!db.getPool()) return { error: 'DATABASE_URL not configured' };
+
+  const attachments = (submission.attachments || []) as Array<{ filename?: string }>;
+  const attachmentSummary = await summarizeAttachment(
+    submission.subject,
+    submission.snippet,
+    attachments.map(a => a?.filename || '')
+  );
+
   try {
     await db.query(
       `INSERT INTO submissions
          (task_key, sender_email, message_id, thread_id, subject, date_received,
-          classification, remarks, raw_snippet, attachments_json)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)`,
+          classification, remarks, raw_snippet, attachments_json, attachment_summary)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11)`,
       [
         reminderKey(submission.tabName, submission.rowIndex),
         submission.senderEmail,
@@ -126,6 +146,7 @@ export async function recordSubmission(
         submission.remarks,
         submission.snippet,
         JSON.stringify(submission.attachments || []),
+        attachmentSummary,
       ]
     );
     return {};

@@ -8,7 +8,7 @@ import { EventEmitter } from 'node:events';
 import { CONFIG } from '../src/config/index.js';
 import { UnifiedTask } from '../src/types/index.js';
 import { TASK_TYPE_OPTIONS } from '../src/util/task-type.js';
-import { parseSheetDate } from '../src/util/parse-date.js';
+import { parseSheetDate, formatDisplayDate } from '../src/util/parse-date.js';
 
 /**
  * Longest accepted free-text field. The Sheet cells these land in are read by
@@ -366,6 +366,11 @@ export function toDashboardTask(t: UnifiedTask) {
     taskType: t.taskType,
     dateAssigned: t.dateAssigned,
     dueDate: t.dueDate,
+    // Display-only copies — DD-Mon-YY regardless of which of the Sheet's several
+    // date formats the raw value arrived in. The raw fields above are untouched
+    // so writes/edits still round-trip the original text.
+    dateAssignedDisplay: formatDisplayDate(t.dateAssigned),
+    dueDateDisplay: formatDisplayDate(t.dueDate),
     status: t.currentStatus,
     remarks: t.remarks,
     threadId: t.threadId,

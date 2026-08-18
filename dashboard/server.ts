@@ -32,6 +32,10 @@ import {
   MAX_TEXT_LENGTH, NewTaskInput, BadRequest, readBody, isAllowedOrigin, isOversizedDigestBatch,
   MAX_STAFF_DIGEST_BATCH, parseBasicAuthPair,
 } from './logic.js';
+import {
+  isValidSessionId, cleanMessage, loadDbContext, loadHistory, buildChatPrompt, askGemini,
+  ChatContext, ContextTask, MAX_MESSAGE_CHARS,
+} from './chat.js';
 
 const PORT = Number(process.env.DASHBOARD_PORT || 4000);
 const HERE = __dirname;
@@ -484,7 +488,7 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
       // register's key pattern could pick up another tab's rows.
       const subs = await safeQuery(
         `SELECT DISTINCT ON (task_key)
-                task_key, thread_id, message_id, subject, date_received, attachments_json
+                task_key, thread_id, message_id, subject, date_received, attachments_json, attachment_summary
            FROM submissions
           WHERE starts_with(task_key, $1)
           ORDER BY task_key, date_received DESC`,
@@ -551,6 +555,11 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
                   subject: sub.subject,
                   dateReceived: sub.date_received,
                   attachments: sub.attachments_json || [],
+                  // Written once by the pipeline when the submission was matched
+                  // (see recordSubmission). null means no summary was generated —
+                  // no GEMINI_API_KEY, no attachments, or the call failed — and the
+                  // UI simply shows nothing rather than a placeholder.
+                  attachmentSummary: sub.attachment_summary || null,
                 }
               : null,
           };
@@ -692,9 +701,53 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
       if (!messageId || !attachmentId) {
         return { status: 400, body: { error: 'messageId and attachmentId are both required.' } };
       }
-      const data = await gmail.getAttachment(messageId, attachmentId);
-      // Signalled to the request handler, which streams bytes instead of JSON.
-      return { body: { __binary: data, filename: url.searchParams.get('filename') || 'attachment' } };
+      try {
+        const data = await gmail.getAttachment(messageId, attachmentId);
+        // Signalled to the request handler, which streams bytes instead of JSON.
+        return { body: { __binary: data, filename: url.searchParams.get('filename') || 'attachment' } };
+      } catch (err: any) {
+        // Without this branch every Gmail failure fell through to the generic
+        // "Something went wrong" — accurate but useless, because the two failures
+        // that actually happen here are both diagnosable and one of them is fixed
+        // by a single command. The distinction is safe to expose: it names a
+        // condition and a remedy, never a credential, host or stack frame (those
+        // still go to the server log only, via internalError).
+        const raw = String(err?.message || err);
+
+        if (/invalid_grant|invalid_token|unauthorized_client/i.test(raw)) {
+          return {
+            status: 502,
+            body: {
+              error: internalError(
+                `Attachment download failed — Gmail auth (message ${messageId})`,
+                err,
+                'Gmail authentication failed: the refresh token is expired or revoked. ' +
+                  'Attachments cannot be fetched until it is renewed — run "npm run auth:gmail" ' +
+                  'and put the new GMAIL_REFRESH_TOKEN in .env.'
+              ),
+            },
+          };
+        }
+
+        // A Gmail attachment id is only valid for the message that owns it, and
+        // both disappear if the message is deleted. That is a permanent condition
+        // for this row, not a transient server fault, so it is a 404 rather than
+        // a 502 an operator might otherwise sit and retry.
+        if (/not\s*found|notFound|\b404\b/i.test(raw)) {
+          return {
+            status: 404,
+            body: {
+              error: internalError(
+                `Attachment no longer in Gmail (message ${messageId})`,
+                err,
+                'Gmail no longer has this attachment — the message was most likely deleted from the mailbox.'
+              ),
+            },
+          };
+        }
+
+        throw err; // anything unrecognised keeps the generic message + full server log
+      }
     },
   },
 
@@ -992,6 +1045,99 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
       return { body: { logs: result.rows, dbWarning: result.error } };
     },
   },
+  // GET /api/chat?sessionId=… — this session's retained conversation.
+  //
+  // Session-scoped rather than "everything in the last 24 hours": rows older than
+  // 24h are deleted by the pipeline's cleanup, so a session's own history IS its
+  // last-24-hours window, and showing another browser tab's conversation here
+  // would be surprising rather than useful.
+  {
+    method: 'GET',
+    pattern: /^\/api\/chat$/,
+    handler: async ({ url }) => {
+      const sessionId = url.searchParams.get('sessionId') || '';
+      if (!isValidSessionId(sessionId)) return { status: 400, body: { error: 'A valid sessionId (UUID) is required.' } };
+      const result = await safeQuery(
+        `SELECT role, content, created_at FROM chat_messages
+          WHERE session_id = $1 ORDER BY created_at ASC, id ASC LIMIT 200`,
+        [sessionId]
+      );
+      return {
+        body: {
+          messages: result.rows.map(r => ({ role: r.role, content: r.content, createdAt: r.created_at })),
+          dbWarning: result.error,
+        },
+      };
+    },
+  },
+
+  // POST /api/chat — one assistant turn.
+  //
+  // Reads ONLY what this process already has: readSheet() is the same memoised
+  // 15-second cache /api/tasks and /api/stats share, so a chat turn normally
+  // costs zero Sheet calls, and there is deliberately no Gmail call anywhere on
+  // this path — every attachment fact the assistant can state was already
+  // written to submissions.attachment_summary by the pipeline.
+  {
+    method: 'POST',
+    pattern: /^\/api\/chat$/,
+    handler: async ({ req }) => {
+      const body = await readBody(req);
+      const message = cleanMessage(body?.message);
+      const sessionId = body?.sessionId;
+
+      if (!isValidSessionId(sessionId)) return { status: 400, body: { error: 'A valid sessionId (UUID) is required.' } };
+      if (!message) {
+        return { status: 400, body: { error: `Ask a question of 1 to ${MAX_MESSAGE_CHARS} characters.` } };
+      }
+
+      // Sheet rows and DB context load together; neither depends on the other.
+      const [sheet, dbCtx, history] = await Promise.all([
+        readSheet().catch(err => {
+          console.error('❌ Chat context: sheet read failed:', err?.stack || err?.message || err);
+          return { tasks: [] as UnifiedTask[], sourceErrors: {} as Record<string, string> };
+        }),
+        loadDbContext(safeQuery),
+        loadHistory(safeQuery, sessionId),
+      ]);
+
+      const toContextTask = (t: UnifiedTask): ContextTask => ({
+        tabName: t.tabName,
+        rowIndex: t.rowIndex,
+        name: t.taskDescriptionOrName || '',
+        assignedTo: t.assignedToName || '',
+        email: t.emailId || '',
+        dueDate: t.dueDate || '',
+        status: t.currentStatus || '',
+        overdueDays: String(t.daysOrOverdueDays ?? ''),
+        isValid: t.isValid !== false,
+      });
+
+      const ctx: ChatContext = {
+        ...dbCtx,
+        tasks: sheet.tasks.filter(t => t.isValid !== false).map(toContextTask),
+        needsAttention: sheet.tasks.filter(t => t.isValid === false).map(toContextTask),
+        // A tab that could not be read is a stated gap, not a silent omission —
+        // otherwise "nothing overdue in MIS" and "MIS unreadable" look identical.
+        warnings: [...dbCtx.warnings, ...Object.keys(sheet.sourceErrors).map(tab => `The sheet tab "${tab}" could not be read`)],
+      };
+
+      const reply = await askGemini(buildChatPrompt(ctx, history, message));
+
+      // Both turns are persisted AFTER the reply exists, in one statement, so a
+      // failed call never leaves a user message hanging with no answer beside it.
+      // Conversation text only — no email bodies, no attachment bytes.
+      const saved = await safeQuery(
+        `INSERT INTO chat_messages (session_id, role, content)
+         VALUES ($1, 'user', $2), ($1, 'assistant', $3)`,
+        [sessionId, message, reply]
+      );
+      if (saved.error) console.warn(`⚠️ Chat turn not persisted for session ${sessionId} — the next turn will lack this context.`);
+
+      return { body: { reply, sessionId } };
+    },
+  },
+
 ];
 
 // --- server ----------------------------------------------------------------

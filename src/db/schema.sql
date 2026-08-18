@@ -54,6 +54,17 @@ CREATE TABLE IF NOT EXISTS submissions (
 ALTER TABLE submissions ADD COLUMN IF NOT EXISTS task_key VARCHAR(120);
 ALTER TABLE submissions ADD COLUMN IF NOT EXISTS subject TEXT;
 ALTER TABLE submissions ADD COLUMN IF NOT EXISTS attachments_json JSONB DEFAULT '[]'::jsonb;
+-- Gemini-generated summary of what the matched email and its attachment are
+-- about, written once when the submission is recorded (see recordSubmission) and
+-- read back by the dashboard. NULL means no summary: no GEMINI_API_KEY, no
+-- attachments on the email, or the call failed.
+ALTER TABLE submissions ADD COLUMN IF NOT EXISTS attachment_summary TEXT;
+-- FALSE means the summary above (if any) was inferred from the filename and
+-- covering note only. TRUE means the .xlsx was downloaded and its actual cell
+-- values were read. The daily summarize:attachments script only overwrites rows
+-- where this is FALSE, so a real file read is never replaced by a weaker guess
+-- and never regenerated at cost once it exists.
+ALTER TABLE submissions ADD COLUMN IF NOT EXISTS summary_from_file_content BOOLEAN DEFAULT FALSE;
 CREATE INDEX IF NOT EXISTS submissions_task_key_idx ON submissions (task_key, date_received DESC);
 
 -- 4. Reminder Logs Table
@@ -96,3 +107,17 @@ CREATE TABLE IF NOT EXISTS approval_requests (
     expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
     resent_at TIMESTAMP WITH TIME ZONE
 );
+
+-- 6. Chat Messages Table (AI Assistant)
+-- Conversation text only — never raw email bodies or attachment bytes. Rows are
+-- deleted after 24 hours by the cleanup at the end of every agent pipeline run,
+-- so this table is a rolling window, not an archive.
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id SERIAL PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  role TEXT NOT NULL, -- 'user' or 'assistant'
+  content TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_session
+  ON chat_messages(session_id, created_at);

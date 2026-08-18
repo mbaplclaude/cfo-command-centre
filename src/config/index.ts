@@ -80,6 +80,10 @@ export const CONFIG = {
   // Anthropic Claude API
   ANTHROPIC_API_KEY: realOrEmpty(process.env.ANTHROPIC_API_KEY),
 
+  // Google Gemini — attachment summaries only (see src/classifier/gemini-summarizer.ts).
+  // Absent is a supported state: summaries are skipped silently, nothing else changes.
+  GEMINI_API_KEY: realOrEmpty(process.env.GEMINI_API_KEY),
+
   // Operational Settings & Safety
   REQUIRE_APPROVAL: process.env.REQUIRE_APPROVAL !== 'false', // Default true
 

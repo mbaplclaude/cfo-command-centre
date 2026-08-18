@@ -17,6 +17,7 @@ if (!CLIENT_ID || !CLIENT_SECRET) {
 }
 
 const oauth2Client = new google.auth.OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URI);
+const PORT = Number(new url.URL(REDIRECT_URI).port) || 3000;
 
 const SCOPES = [
   'https://www.googleapis.com/auth/gmail.readonly',
@@ -38,7 +39,7 @@ async function main() {
   console.log('1. Open the following URL in your browser:\n');
   console.log(authUrl);
   console.log('\n2. Log in as mbaplclaudereply@gmail.com and approve access.');
-  console.log('3. Waiting for authorization callback on port 3000...\n');
+  console.log(`3. Waiting for authorization callback on port ${PORT}...\n`);
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -71,8 +72,8 @@ async function main() {
     }
   });
 
-  server.listen(3000, () => {
-    console.log('Callback server running at http://localhost:3000/oauth2callback');
+  server.listen(PORT, () => {
+    console.log(`Callback server running at http://localhost:${PORT}/oauth2callback`);
   });
 }
 
