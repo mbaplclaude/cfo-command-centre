@@ -423,6 +423,82 @@ export class GoogleSheetsClient {
   }
 
   /**
+   * Update the user-editable fields of an EXISTING row — the dashboard's Edit
+   * form (Task List and Needs Attention). This is the same editable-column set
+   * appendRow writes for a brand-new row; Status/Remarks/Days/Thread ID stay off
+   * limits here, exactly as for every other dashboard write — those are the
+   * pipeline's own columns, touched only via updateRowColumns.
+   *
+   * Column-name-matched and RAW, like every other writer in this class. Only
+   * fields actually present in `fields` are written, one cell at a time, so a
+   * caller can never blank a column it didn't intend to touch.
+   */
+  public async updateEditableFields(
+    tabName: string,
+    rowIndex: number,
+    fields: Partial<{
+      taskDescription: string;
+      assignedTo: string;
+      emailId: string;
+      names: string;
+      taskType: string;
+      dateAssigned: string;
+      dueDate: string;
+    }>,
+    spreadsheetId: string = CONFIG.GOOGLE_SHEET_ID
+  ): Promise<void> {
+    if (!isWriteAllowed(spreadsheetId, tabName)) {
+      throw new Error(`Write rejected: tab "${tabName}" on sheet ${spreadsheetId} is not in the approved write scope.`);
+    }
+
+    const sheets = await this.getClient();
+    const { headers, headerRow } = await this.readTabValues(spreadsheetId, tabName, 'A1:Z20');
+    if (headerRow === -1) {
+      throw new Error(`Write rejected: could not locate the header row on "${tabName}".`);
+    }
+
+    const isStaff = tabName === CONFIG.STAFF_TRACKER_TAB;
+
+    // Same column names appendRow uses for a new row — the report-shaped branch
+    // (Report Calendar + both MIS registers) shares one layout, same as everywhere
+    // else this distinction is made.
+    const targets: Array<{ header: string; value: string | undefined }> = isStaff
+      ? [
+          { header: 'taskdescription', value: fields.taskDescription },
+          { header: 'assignedto', value: fields.assignedTo },
+          { header: 'emailid', value: fields.emailId },
+          { header: 'names', value: fields.names },
+          { header: 'tasktype', value: fields.taskType },
+          { header: 'dateassigned', value: fields.dateAssigned },
+          { header: 'duedate', value: fields.dueDate },
+        ]
+      : [
+          { header: 'reportname', value: fields.taskDescription },
+          { header: 'source/whosends', value: fields.assignedTo },
+          { header: 'emailid', value: fields.emailId },
+          { header: 'name', value: fields.names },
+          { header: 'tasktype', value: fields.taskType },
+          { header: 'reviewtiming', value: fields.dueDate },
+        ];
+
+    for (const target of targets) {
+      if (target.value === undefined) continue; // field not part of this edit
+      const colIndex = headers.indexOf(target.header);
+      if (colIndex === -1) {
+        console.warn(`   ⚠️ No "${target.header}" column on "${tabName}" — skipping that write rather than guessing a column.`);
+        continue;
+      }
+      const colLetter = String.fromCharCode(65 + colIndex);
+      await sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `'${tabName}'!${colLetter}${rowIndex}`,
+        valueInputOption: 'RAW', // literal text; never let the Sheet reinterpret it
+        requestBody: { values: [[target.value]] },
+      });
+    }
+  }
+
+  /**
    * Append a new task row to the specified Google Sheet tab.
    * Only writes user-supplied columns; leaves Status/Remarks/Thread ID/Days blank for the pipeline.
    *

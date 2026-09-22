@@ -121,3 +121,13 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_chat_messages_session
   ON chat_messages(session_id, created_at);
+
+-- 7. Reviewed Tasks Table — dashboard-only bookkeeping for the "Mark reviewed"
+-- toggle. Never written to the Google Sheet and never read by the pipeline; it
+-- exists purely so the dashboard can move a row out of the main Task List into
+-- a collapsible "Reviewed" section. task_key is "<tab>|<rowIndex>", the same
+-- stable Sheet-row identity submissions/reminder_logs already key on.
+CREATE TABLE IF NOT EXISTS reviewed_tasks (
+    task_key VARCHAR(120) PRIMARY KEY,
+    reviewed_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);

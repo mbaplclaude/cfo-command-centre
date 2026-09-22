@@ -23,6 +23,7 @@ import { resolveReportPeriod } from '../src/classifier/report-schedule.js';
 import { evaluateRowSubmission } from '../src/pipeline/row-evaluation.js';
 import { LLMReasoner } from '../src/classifier/llm-reasoner.js';
 import { reminderKey, recordSubmission } from '../src/db/reminder-history.js';
+import { formatDisplayDate } from '../src/util/parse-date.js';
 import { EmployeeStatsAggregator } from '../src/stats/employee-stats.js';
 import { approveAndDispatchRun } from '../src/agent.js';
 import { CONFIG } from '../src/config/index.js';
@@ -515,6 +516,15 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
       const mailByKey = new Map<string, any>();
       for (const m of mail.rows) mailByKey.set(m.task_key, m);
 
+      // Dashboard-only "Mark reviewed" bookkeeping — never part of sheetCache,
+      // read fresh on every request like subs/mail above.
+      const reviewed = await safeQuery(
+        `SELECT task_key, reviewed_at FROM reviewed_tasks WHERE starts_with(task_key, $1)`,
+        [`${tabName}|`]
+      );
+      const reviewedByKey = new Map<string, any>();
+      for (const r of reviewed.rows) reviewedByKey.set(r.task_key, r.reviewed_at);
+
       const tasks = all
         .filter(t => t.tabName === tabName && t.isValid)
         .map(t => {
@@ -554,6 +564,11 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
                   messageId: sub.message_id,
                   subject: sub.subject,
                   dateReceived: sub.date_received,
+                  // DD-Mon-YY, same display convention as dateAssignedDisplay /
+                  // dueDateDisplay — shown next to a "Received"/"Received (Early)"
+                  // status badge. Sourced from the existing submissions.date_received
+                  // column, not a new field the pipeline has to start writing.
+                  dateReceivedDisplay: formatDisplayDate(sub.date_received.toISOString()),
                   attachments: sub.attachments_json || [],
                   // Written once by the pipeline when the submission was matched
                   // (see recordSubmission). null means no summary was generated —
@@ -562,6 +577,9 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
                   attachmentSummary: sub.attachment_summary || null,
                 }
               : null,
+            // Dashboard-only bookkeeping (see reviewed_tasks) — never affects
+            // classification, reminders, or anything else in the pipeline.
+            reviewedAt: reviewedByKey.get(key) || null,
           };
         });
 
@@ -569,7 +587,7 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
         body: {
           tab: tabName,
           tasks,
-          dbWarning: subs.error || mail.error,
+          dbWarning: subs.error || mail.error || reviewed.error,
           // Only this tab's own read failure — one unreadable workbook must not
           // put a warning on every other tab's page.
           sheetWarning: sourceErrors[tabName],
@@ -685,6 +703,122 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
           notified,
           notifyError,
         },
+      };
+    },
+  },
+
+  // POST /api/tasks/edit — edit the user-editable fields of an EXISTING row
+  // (Task List or Needs Attention). Validation is IDENTICAL to adding a new row:
+  // the Edit form sends the exact same field shape as "Add a Task", just against
+  // a rowIndex that already exists, so validateNewTask (strict resolveWriteTab,
+  // field coercion/limits, the own-mailbox/task-type/date checks) applies
+  // unchanged. Only the write target differs — an existing cell, not a new row.
+  {
+    method: 'POST',
+    pattern: /^\/api\/tasks\/edit$/,
+    handler: async ({ req }) => {
+      const input = await readBody(req);
+      const { ok, errors, clean, tab: tabName } = validateNewTask(input);
+      const rowIndex = Number(input.rowIndex);
+      if (!Number.isInteger(rowIndex) || rowIndex < 1) {
+        errors.rowIndex = 'rowIndex is required and must be a positive whole number.';
+      }
+      if (!ok || errors.rowIndex) return { status: 400, body: { errors } };
+
+      // Same read-only MIS guard as the Task Type editor and every other
+      // dashboard write — this must never be a quieter way around --i-mean-it.
+      const guarded = CONFIG.REPORT_SOURCES.find(s => s.tab === tabName && s.requiresConfirmation);
+      if (guarded) {
+        return {
+          status: 403,
+          body: {
+            error:
+              `"${guarded.label}" is read-only from the dashboard: it still requires --i-mean-it on the command line ` +
+              `before anything may write to it. Edit this row in the Sheet itself.`,
+          },
+        };
+      }
+
+      try {
+        // No `names` here, deliberately: the Edit form (like Add a Task) never
+        // collects that field, so clean.names is always ''. Omitting the key
+        // (rather than passing that '') leaves it `undefined`, which
+        // updateEditableFields treats as "not part of this edit" and skips —
+        // an existing row's Report Calendar/MIS "Name" column (distinct from
+        // Source/Who Sends) survives the edit instead of being blanked out.
+        await sheets.updateEditableFields(tabName, rowIndex, {
+          taskDescription: clean.taskDescription,
+          assignedTo: clean.assignedTo,
+          emailId: clean.emailId,
+          taskType: clean.taskType,
+          dateAssigned: clean.dateAssigned,
+          dueDate: clean.dueDate,
+        });
+      } catch (err: any) {
+        return {
+          status: 502,
+          body: {
+            error: internalError(
+              `Sheet write failed (edit, ${tabName} row ${rowIndex})`,
+              err,
+              'Could not save the edit to the Sheet — see the dashboard server log.'
+            ),
+          },
+        };
+      }
+
+      sheetCache = null; // Step 2 — next read reflects the edit, not the 15s-old cache
+
+      // Best-effort DB mirror — the Sheet write already succeeded and is authoritative.
+      const mirror = await safeQuery(
+        `UPDATE tasks SET task_description=$1, assigned_to=$2, email_id=$3, task_type=$4, date_assigned=$5, due_date=$6, updated_at=NOW()
+         WHERE tab_name=$7 AND row_index=$8`,
+        [clean.taskDescription, clean.assignedTo, clean.emailId, clean.taskType, clean.dateAssigned, clean.dueDate, tabName, rowIndex]
+      );
+
+      return { status: 200, body: { ok: true, tabName, rowIndex, dbWarning: mirror.error } };
+    },
+  },
+
+  // POST /api/tasks/reviewed — the dashboard-only "Mark reviewed" bookkeeping
+  // toggle (see reviewed_tasks in schema.sql). Purely organizational: it never
+  // touches the Sheet, classification, or reminders — only which section of the
+  // dashboard a row currently renders in.
+  {
+    method: 'POST',
+    pattern: /^\/api\/tasks\/reviewed$/,
+    handler: async ({ req }) => {
+      const body = await readBody(req);
+      const tabName = scalarText(body.tab);
+      const rowIndex = Number(body.rowIndex);
+      if (!tabName) return { status: 400, body: { error: 'tab is required.' } };
+      if (!Number.isInteger(rowIndex) || rowIndex < 1) {
+        return { status: 400, body: { error: 'rowIndex is required and must be a positive whole number.' } };
+      }
+      const markReviewed = body.reviewed !== false;
+
+      // Confirm the row actually exists (valid or Needs Attention) before
+      // recording a mark against it — otherwise a stale/malformed task_key would
+      // sit in this table forever with no real row to ever match it back to.
+      const { tasks: all } = await readSheet();
+      if (!all.some(t => t.tabName === tabName && t.rowIndex === rowIndex)) {
+        return { status: 404, body: { error: `Row ${rowIndex} not found on "${tabName}".` } };
+      }
+
+      const taskKey = `${tabName}|${rowIndex}`;
+      const result = markReviewed
+        ? await safeQuery(
+            `INSERT INTO reviewed_tasks (task_key, reviewed_at) VALUES ($1, NOW())
+             ON CONFLICT (task_key) DO UPDATE SET reviewed_at = NOW()
+             RETURNING reviewed_at`,
+            [taskKey]
+          )
+        : await safeQuery(`DELETE FROM reviewed_tasks WHERE task_key = $1`, [taskKey]);
+
+      if (result.error) return { status: 503, body: { error: result.error } };
+      return {
+        status: 200,
+        body: { ok: true, tabName, rowIndex, reviewed: markReviewed, reviewedAt: result.rows[0]?.reviewed_at || null },
       };
     },
   },

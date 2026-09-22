@@ -371,6 +371,15 @@ const state = {
   showExpiredApprovals: false, // collapsed by default so dead runs don't bury active ones
   taskTypeOptions: [],   // from GET /api/task-types — single canonical list
   taskTypeEditing: {},   // "tab|rowIndex" -> 'busy' | { ok, message } while an edit is in flight
+  // Row edit form (Task List + Needs Attention, all sheet-backed tabs). Only one
+  // row's form is ever open at a time, like `expanded` above.
+  editingKey: null,      // "tab|rowIndex" of the row currently showing its edit form, or null
+  editFormErrors: {},
+  editFormNote: null,
+  // "Mark reviewed" — dashboard-only bookkeeping, collapsed by default per tab,
+  // same pattern as showExpiredApprovals.
+  showReviewed: {},       // tabId -> bool
+  reviewedBusy: {},        // "tab|rowIndex" -> true while a mark/unmark POST is in flight
   // Manual Staff Tracker send flow (Report Calendar is unaffected — that tab
   // keeps the automated draft/approve/send pipeline exactly as before).
   staffSend: {
@@ -756,8 +765,15 @@ function taskView(tabId) {
         (t.emailId || '').toLowerCase().includes(needle)
       )
     : (d.tasks || []);
+  // "Mark reviewed" (dashboard-only, reviewed_tasks) splits the same search-
+  // filtered set in two: the main Task List table shows only the active half,
+  // the rest move to the collapsed Reviewed section below.
+  const activeTasks = tasks.filter(t => !t.reviewedAt);
+  const reviewedTasks = tasks.filter(t => t.reviewedAt);
   const attention = (d.attention || []).filter(r => r.tabName === d.tab);
-  const counts = tasks.reduce((acc, t) => ({ ...acc, [t.category]: (acc[t.category] || 0) + 1 }), {});
+  // Reflects the visible Task List (active rows) — a reviewed row is fully out
+  // of the way, including its contribution to these counts.
+  const counts = activeTasks.reduce((acc, t) => ({ ...acc, [t.category]: (acc[t.category] || 0) + 1 }), {});
   // The MIS registers use Report Calendar's column layout exactly, so they render
   // through the same branch — "isReport" means "report-shaped", not "is the
   // primary Report Calendar tab". isMis carries the differences that are real:
@@ -777,12 +793,21 @@ function taskView(tabId) {
   // already computed everywhere else — so a reminder is never drafted for a
   // task that isn't due yet or is already Received.
   const canSelect = !isReport;
-  const selectedCount = canSelect ? tasks.filter(t => state.staffSend.selected.has(t.rowIndex)).length : 0;
+  const selectedCount = canSelect ? activeTasks.filter(t => state.staffSend.selected.has(t.rowIndex)).length : 0;
+  const colCount = canSelect ? 8 : 7; // for the edit-form row's colspan below
 
-  const rows = tasks.map(t => {
+  const rows = activeTasks.map(t => {
     const open = state.expanded === `${t.tabName}:${t.rowIndex}`;
     const selectable = canSelect && t.category === 'overdue';
     const checked = selectable && state.staffSend.selected.has(t.rowIndex);
+    const editKey = `${t.tabName}|${t.rowIndex}`;
+    const editing = state.editingKey === editKey;
+    const reviewBusy = state.reviewedBusy[editKey];
+    // "Received"/"Received (Early)" only — the date this row's matched
+    // submission actually arrived, from submissions.date_received.
+    const receivedNote = (t.category === 'received' || t.category === 'early') && t.submission?.dateReceivedDisplay
+      ? `<div class="ccc-sub">received ${esc(t.submission.dateReceivedDisplay)}</div>`
+      : '';
     return `
       <tr>
         ${canSelect ? `<td class="ccc-checkcell">${selectable ? `<input type="checkbox" data-staff-select="${t.rowIndex}" ${checked ? 'checked' : ''} />` : ''}</td>` : ''}
@@ -790,7 +815,11 @@ function taskView(tabId) {
         <td>
           <div class="ccc-primary">${esc(t.taskDescription || '(untitled)')}</div>
           ${taskTypeEditor(t, isMis)}
-          ${t.remarks || t.threadId || t.submission ? `<button class="ccc-expand" data-expand="${esc(t.tabName)}:${t.rowIndex}">${open ? 'Hide' : 'Show'} agent detail</button>` : ''}
+          <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:4px;">
+            ${t.remarks || t.threadId || t.submission ? `<button class="ccc-expand" data-expand="${esc(t.tabName)}:${t.rowIndex}">${open ? 'Hide' : 'Show'} agent detail</button>` : ''}
+            ${isMis ? '' : `<button class="ccc-expand" data-edit-toggle="${esc(editKey)}">${editing ? 'Cancel edit' : '✎ Edit'}</button>`}
+            <button class="ccc-expand" data-mark-reviewed="${esc(editKey)}" ${reviewBusy ? 'disabled' : ''}>${reviewBusy ? 'Saving…' : '☑ Mark reviewed'}</button>
+          </div>
           ${open ? agentDetail(t) : ''}
           ${!open && t.submission?.attachments?.length ? `<div class="ccc-sub">${attachmentLinks(t.submission.attachments)}</div>` : ''}
         </td>
@@ -799,10 +828,11 @@ function taskView(tabId) {
           <div class="ccc-sub">${esc(t.emailId)}</div>
         </td>
         <td>${isReport ? esc(t.dueDateDisplay || '—') : `${esc(t.dateAssignedDisplay || '—')}<div class="ccc-sub">due ${esc(t.dueDateDisplay || '—')}</div>`}</td>
-        <td>${badge(t.category)}<div class="ccc-sub">${esc(t.status || 'Pending')}</div></td>
+        <td>${badge(t.category)}<div class="ccc-sub">${esc(t.status || 'Pending')}</div>${receivedNote}</td>
         <td>${mailCell(t.mail)}</td>
         <td class="ccc-num">${esc(t.days || '—')}</td>
-      </tr>`;
+      </tr>
+      ${editing ? `<tr class="ccc-edit-row"><td colspan="${colCount}">${editForm(t, isReport)}</td></tr>` : ''}`;
   }).join('');
 
   // What this tab's rows are actually subject to. The MIS line is the important
@@ -827,7 +857,7 @@ function taskView(tabId) {
   return `
     <div class="ccc-pagehead">
       <h1>${isMis ? 'MIS Checklist' : esc(d.tab)}</h1>
-      <p>${isMis ? `<b>${esc(d.tab)}</b> — live from the Google Sheet, ` : 'Live from the Google Sheet — '}${tasks.length} row${tasks.length === 1 ? '' : 's'} passing the safety filter.${scopeNote}</p>
+      <p>${isMis ? `<b>${esc(d.tab)}</b> — live from the Google Sheet, ` : 'Live from the Google Sheet — '}${tasks.length} row${tasks.length === 1 ? '' : 's'} passing the safety filter${reviewedTasks.length ? ` (${reviewedTasks.length} marked reviewed, shown below)` : ''}.${scopeNote}</p>
     </div>
 
     ${subtabs}
@@ -846,30 +876,38 @@ function taskView(tabId) {
         </div>
       </header>
       <div class="ccc-scroll">
-        ${tasks.length ? `<table class="ccc-table">
+        ${activeTasks.length ? `<table class="ccc-table">
           <thead><tr>
             ${canSelect ? `<th></th>` : ''}
             <th class="ccc-num" title="Physical row number in the Google Sheet">Sheet row</th><th>${isReport ? 'Report' : 'Task'}</th><th>${isReport ? 'Source' : 'Assigned to'}</th>
             <th>${isReport ? 'Review timing' : 'Assigned / due'}</th><th>Status</th><th>Mail sent</th><th class="ccc-num">${isReport ? 'Overdue' : 'Days'}</th>
           </tr></thead>
           <tbody>${rows}</tbody>
-        </table>` : needle ? `<div class="ccc-empty">No rows match “${esc(state.search.trim())}”.</div>` : `<div class="ccc-empty">No valid rows on this tab yet. Add one below, or check that the service account can read the Sheet.</div>`}
+        </table>` : needle ? `<div class="ccc-empty">No rows match “${esc(state.search.trim())}”.</div>` : reviewedTasks.length ? `<div class="ccc-empty">All rows are marked reviewed — see the Reviewed section below.</div>` : `<div class="ccc-empty">No valid rows on this tab yet. Add one below, or check that the service account can read the Sheet.</div>`}
       </div>
     </section>
 
     ${attention.length ? `<section class="ccc-card">
       <header><div>
         <h3>Needs attention — ${attention.length} row${attention.length === 1 ? '' : 's'} excluded</h3>
-        <p>These rows are never emailed. Fix the flagged field in the Sheet to bring them into the pipeline.</p>
+        <p>These rows are never emailed. Fix the flagged field${isMis ? ' in the Sheet' : ' in the Sheet, or use Edit below,'} to bring them into the pipeline.</p>
       </div></header>
       <div class="ccc-scroll"><table class="ccc-table">
         <thead><tr><th class="ccc-num" title="Physical row number in the Google Sheet">Sheet row</th><th>Task</th><th>Email</th><th>Issue</th></tr></thead>
-        <tbody>${attention.map(r => `<tr>
-          <td class="ccc-num">${r.rowIndex}${sheetLabel(r.idNum)}</td>
-          <td class="ccc-primary">${esc(r.taskDescription || '(untitled)')}</td>
-          <td>${esc(r.emailId || '(missing)')}</td>
-          <td>${badge('attention')}<div class="ccc-sub">${esc(r.validationIssue)}</div></td>
-        </tr>`).join('')}</tbody>
+        <tbody>${attention.map(r => {
+          const editKey = `${r.tabName}|${r.rowIndex}`;
+          const editing = state.editingKey === editKey;
+          return `<tr>
+            <td class="ccc-num">${r.rowIndex}${sheetLabel(r.idNum)}</td>
+            <td class="ccc-primary">${esc(r.taskDescription || '(untitled)')}</td>
+            <td>${esc(r.emailId || '(missing)')}</td>
+            <td>
+              ${badge('attention')}<div class="ccc-sub">${esc(r.validationIssue)}</div>
+              ${isMis ? '' : `<div style="margin-top:6px;"><button class="ccc-expand" data-edit-toggle="${esc(editKey)}">${editing ? 'Cancel edit' : '✎ Edit'}</button></div>`}
+            </td>
+          </tr>
+          ${editing ? `<tr class="ccc-edit-row"><td colspan="4">${editForm(r, isReport)}</td></tr>` : ''}`;
+        }).join('')}</tbody>
       </table></div>
     </section>` : ''}
 
@@ -895,7 +933,9 @@ function taskView(tabId) {
         <button class="ccc-btn" data-submit="task" data-tab="${tabId}">＋ Add to Sheet</button>
         <span class="ccc-note">${state.formNote ? `<span class="${state.formNote.ok ? 'ccc-note-good' : 'ccc-note-bad'}">${esc(state.formNote.text)}</span>` : `The agent's own mailbox address is rejected as an assignee.`}</span>
       </div>
-    </section>`;
+    </section>
+
+    ${reviewedSection(tabId, reviewedTasks, isReport)}`;
 }
 
 /** Expanded per-row detail: remarks, clickable thread link, attachment links. */
@@ -937,31 +977,49 @@ function agentDetail(t) {
   return `<div class="ccc-detail">${rows.join('<br>')}</div>`;
 }
 
+/**
+ * opts.idPrefix namespaces the DOM id (and the dropdown listbox id) so a second
+ * form — the row Edit form — can render the same field names as the Add-a-Task
+ * form without colliding ids on the page (duplicate ids break `<label for>` and
+ * would make the label click focus the WRONG form's input).
+ * opts.value pre-fills the field (Edit form); opts.errors overrides which error
+ * bag is read, so an Edit form's errors never leak onto the Add form's fields.
+ */
 function field(name, label, type = 'text', required = false, opts = {}) {
-  const err = state.formErrors[name];
+  const idPrefix = opts.idPrefix || '';
+  const id = `${idPrefix}f-${name}`;
+  const err = (opts.errors || state.formErrors)[name];
   if (type === 'select') {
     // Sourced from GET /api/task-types (src/util/task-type.ts) — one canonical
     // list, not a second copy hardcoded here that could drift from the backend.
-    const options = state.taskTypeOptions || [];
-    return `<div class="ccc-field"><label for="f-${name}">${esc(label)}</label>
-      <select id="f-${name}" name="${name}">
-        <option value="">—</option>
-        ${options.map(o => `<option value="${esc(o)}">${esc(o)}</option>`).join('')}
+    const known = state.taskTypeOptions || [];
+    const current = opts.value || '';
+    // The row's current value is always offered even if it isn't in the
+    // canonical list (blank, or legacy free text already on the Sheet) —
+    // rendering the field must never itself change data by dropping it.
+    const options = !current || known.includes(current) ? known : [current, ...known];
+    return `<div class="ccc-field"><label for="${id}">${esc(label)}</label>
+      <select id="${id}" name="${name}">
+        <option value="" ${current ? '' : 'selected'}>—</option>
+        ${options.map(o => `<option value="${esc(o)}" ${o === current ? 'selected' : ''}>${esc(o)}</option>`).join('')}
       </select></div>`;
   }
   // Date Assigned defaults to today — it is almost always "now", and a blank
   // required field is the most common reason the Add Task form fails validation.
-  const defaultValue = type === 'date' && name === 'dateAssigned' ? ` value="${todayISO()}"` : '';
+  // An explicit opts.value (Edit form pre-fill) always wins over that default.
+  const defaultValue = opts.value !== undefined && opts.value !== null
+    ? ` value="${esc(opts.value)}"`
+    : (type === 'date' && name === 'dateAssigned' ? ` value="${todayISO()}"` : '');
   // autocomplete="off" suppresses the browser's own saved-value popup, which
   // would otherwise appear on top of our dropdown.
   const noAuto = opts.dropdown ? ' autocomplete="off"' : '';
   const combo = opts.dropdown
     ? ` role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="ccc-dd-list"`
     : '';
-  const input = `<input id="f-${name}" name="${name}" type="${type}"${defaultValue}${noAuto}${combo} ${required ? 'required' : ''} />`;
+  const input = `<input id="${id}" name="${name}" type="${type}"${defaultValue}${noAuto}${combo} ${required ? 'required' : ''} />`;
 
   return `<div class="ccc-field" data-invalid="${Boolean(err)}">
-    <label for="f-${name}">${esc(label)}${required ? ' *' : ''}</label>
+    <label for="${id}">${esc(label)}${required ? ' *' : ''}</label>
     ${opts.dropdown
       ? `<div class="ccc-dd-wrap">${input}<div class="ccc-dd" id="ccc-dd-list" role="listbox" hidden></div></div>`
       : input}
@@ -1020,6 +1078,72 @@ function taskTypeEditor(t, readOnly = false) {
       : '';
 
   return `<div class="ccc-tasktype-row">${select}${feedback}</div>`;
+}
+
+/**
+ * Inline edit form for one existing row (Task List or Needs Attention),
+ * pre-filled with its current values. Deliberately the SAME fields, labels and
+ * validation as the "Add a Task" form below (field() is the same function) —
+ * the server's validateNewTask doesn't care whether the row is new or existing,
+ * only the target (an existing rowIndex vs. a fresh append) differs.
+ */
+function editForm(t, isReport) {
+  const idp = `edit${t.rowIndex}-`;
+  const f = (name, label, type, required, value) =>
+    field(name, label, type, required, { idPrefix: idp, errors: state.editFormErrors, value });
+  return `<div class="ccc-detail" style="background:var(--surface-2)">
+    <form class="ccc-form" data-form="edit">
+      ${f('taskDescription', isReport ? 'Report name' : 'Task description', 'text', true, t.taskDescription)}
+      ${f('assignedTo', isReport ? 'Source / who sends' : 'Assigned to', 'text', false, t.assignedTo)}
+      ${f('emailId', 'Email ID', 'email', true, t.emailId)}
+      ${f('taskType', 'Task type', 'select', false, t.taskType)}
+      ${isReport
+        ? f('dueDate', 'Review timing', 'text', false, t.dueDate)
+        // ISO copies, not the raw Sheet text — see toISODateInput's own comment
+        // for why a non-ISO value here would silently blank on save.
+        : f('dateAssigned', 'Date assigned', 'date', true, t.dateAssignedISO) + f('dueDate', 'Due date', 'date', false, t.dueDateISO)}
+    </form>
+    <div class="ccc-actions">
+      <button class="ccc-btn" data-submit="edit">💾 Save changes</button>
+      <button class="ccc-btn ccc-btn-ghost" data-edit-cancel>Cancel</button>
+      <span class="ccc-note">${state.editFormNote ? `<span class="${state.editFormNote.ok ? 'ccc-note-good' : 'ccc-note-bad'}">${esc(state.editFormNote.text)}</span>` : ''}</span>
+    </div>
+  </div>`;
+}
+
+/**
+ * Collapsed-by-default "Reviewed" section — same pattern as the approvals tab's
+ * "Show expired" toggle. Purely a dashboard-side view filter (reviewed_tasks):
+ * it never changes classification, reminders, or Sheet data.
+ */
+function reviewedSection(tabId, reviewedTasks, isReport) {
+  if (!reviewedTasks.length) return '';
+  const open = Boolean(state.showReviewed[tabId]);
+  const rows = reviewedTasks.map(t => {
+    const key = `${t.tabName}|${t.rowIndex}`;
+    const busy = state.reviewedBusy[key];
+    return `<tr>
+      <td class="ccc-num">${t.rowIndex}${sheetLabel(t.idNum)}</td>
+      <td class="ccc-primary">${esc(t.taskDescription || '(untitled)')}</td>
+      <td><div class="ccc-primary">${esc(t.assignedTo || '—')}</div><div class="ccc-sub">${esc(t.emailId)}</div></td>
+      <td>${badge(t.category)}<div class="ccc-sub">${esc(t.status || 'Pending')}</div></td>
+      <td class="ccc-sub">${fmtDate(t.reviewedAt)}</td>
+      <td><button class="ccc-btn ccc-btn-ghost" data-unreview="${esc(key)}" ${busy ? 'disabled' : ''}>${busy ? 'Saving…' : '↩ Unmark'}</button></td>
+    </tr>`;
+  }).join('');
+
+  return `<section class="ccc-card ccc-card-muted">
+    <header><div>
+      <button class="ccc-expand" data-toggle-reviewed="${esc(tabId)}">${open ? 'Hide' : 'Show'} reviewed (${reviewedTasks.length})</button>
+      <p>Marked reviewed from this dashboard — a bookkeeping note kept separately from the Sheet, not a Sheet edit.</p>
+    </div></header>
+    ${open ? `<div class="ccc-scroll"><table class="ccc-table">
+      <thead><tr>
+        <th class="ccc-num" title="Physical row number in the Google Sheet">Sheet row</th><th>${isReport ? 'Report' : 'Task'}</th><th>${isReport ? 'Source' : 'Assigned to'}</th><th>Status</th><th>Reviewed</th><th></th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>` : ''}
+  </section>`;
 }
 
 /** Directory entries as {name, email}, newest lookup source for autofill. */
@@ -1532,7 +1656,8 @@ document.addEventListener('keydown', ev => {
 document.addEventListener('click', async ev => {
   const t = ev.target.closest(
     '[data-tab],[data-subtab],[data-mis-tab],[data-expand],[data-refresh],[data-submit],[data-approve],' +
-      '[data-staff-preview],[data-staff-confirm],[data-staff-cancel],[data-staff-close],[data-toggle-expired]'
+      '[data-staff-preview],[data-staff-confirm],[data-staff-cancel],[data-staff-close],[data-toggle-expired],' +
+      '[data-edit-toggle],[data-edit-cancel],[data-toggle-reviewed],[data-mark-reviewed],[data-unreview]'
   );
   if (!t) return;
 
@@ -1547,6 +1672,48 @@ document.addEventListener('click', async ev => {
   if (t.dataset.toggleExpired !== undefined) {
     state.showExpiredApprovals = !state.showExpiredApprovals;
     return render();
+  }
+
+  if (t.dataset.toggleReviewed !== undefined) {
+    const id = t.dataset.toggleReviewed;
+    state.showReviewed[id] = !state.showReviewed[id];
+    return render();
+  }
+
+  if (t.dataset.editToggle !== undefined) {
+    const key = t.dataset.editToggle;
+    state.editingKey = state.editingKey === key ? null : key;
+    state.editFormErrors = {};
+    state.editFormNote = null;
+    return render();
+  }
+
+  if (t.dataset.editCancel !== undefined) {
+    state.editingKey = null;
+    state.editFormErrors = {};
+    state.editFormNote = null;
+    return render();
+  }
+
+  if (t.dataset.markReviewed !== undefined || t.dataset.unreview !== undefined) {
+    const key = t.dataset.markReviewed !== undefined ? t.dataset.markReviewed : t.dataset.unreview;
+    const reviewed = t.dataset.markReviewed !== undefined;
+    const [tabName, rowIndexStr] = key.split('|');
+    state.reviewedBusy[key] = true;
+    render();
+    try {
+      await api('/api/tasks/reviewed', {
+        method: 'POST',
+        body: JSON.stringify({ tab: tabName, rowIndex: Number(rowIndexStr), reviewed }),
+      });
+      delete state.reviewedBusy[key];
+      await load(state.tab); // re-renders with the row moved to/from Reviewed
+    } catch (err) {
+      console.error('Mark reviewed failed:', err.message);
+      delete state.reviewedBusy[key];
+      render();
+    }
+    return;
   }
 
   if (t.dataset.tab && t.classList.contains('ccc-tab')) {
@@ -1580,6 +1747,27 @@ document.addEventListener('click', async ev => {
     } catch (err) {
       state.formErrors = err.body?.errors || {};
       state.formNote = { ok: false, text: Object.keys(state.formErrors).length ? 'Fix the highlighted fields.' : err.message };
+      render();
+    }
+    return;
+  }
+
+  if (t.dataset.submit === 'edit') {
+    const form = document.querySelector('[data-form="edit"]');
+    const payload = Object.fromEntries(new FormData(form));
+    const [tabName, rowIndexStr] = state.editingKey.split('|');
+    payload.tab = tabName;
+    payload.rowIndex = Number(rowIndexStr);
+    t.disabled = true;
+    try {
+      await api('/api/tasks/edit', { method: 'POST', body: JSON.stringify(payload) });
+      state.editFormErrors = {};
+      state.editFormNote = null;
+      state.editingKey = null; // close the form on success
+      await load(state.tab, { refresh: true }); // Sheet changed — bypass the 15s cache
+    } catch (err) {
+      state.editFormErrors = err.body?.errors || {};
+      state.editFormNote = { ok: false, text: Object.keys(state.editFormErrors).length ? 'Fix the highlighted fields.' : err.message };
       render();
     }
     return;

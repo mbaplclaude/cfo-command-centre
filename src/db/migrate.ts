@@ -16,7 +16,7 @@ const ddl = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
 
 new DatabaseClient()
   .query(ddl)
-  .then(() => console.log('✅ Schema applied (6 tables: employees, tasks, submissions, reminder_logs, approval_requests, chat_messages).'))
+  .then(() => console.log('✅ Schema applied (7 tables: employees, tasks, submissions, reminder_logs, approval_requests, chat_messages, reviewed_tasks).'))
   .then(() => process.exit(0))
   .catch(err => {
     console.error(`❌ Migration failed: ${err.message}`);

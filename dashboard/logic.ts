@@ -354,6 +354,23 @@ export function validateNewTask(
   return { ok: Object.keys(errors).length === 0, errors, clean, tab: tabName || '' };
 }
 
+/**
+ * Sheet date text -> "YYYY-MM-DD" for pre-filling an <input type="date">, or ''
+ * when the text isn't a date at all (blank, or Report Calendar's free-text
+ * "review timing" column). An HTML date input silently ignores a `value` it
+ * doesn't recognise rather than erroring, so without this conversion the Edit
+ * form's date fields would render blank for every non-ISO Sheet date — and
+ * saving unchanged would then write that blank back over a good value.
+ */
+export function toISODateInput(dateStr: string): string {
+  if (!dateStr) return '';
+  const d = parseSheetDate(dateStr);
+  if (isNaN(d.getTime())) return '';
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${month}-${day}`;
+}
+
 /** Flatten a UnifiedTask into the shape the frontend renders. */
 export function toDashboardTask(t: UnifiedTask) {
   return {
@@ -371,6 +388,10 @@ export function toDashboardTask(t: UnifiedTask) {
     // so writes/edits still round-trip the original text.
     dateAssignedDisplay: formatDisplayDate(t.dateAssigned),
     dueDateDisplay: formatDisplayDate(t.dueDate),
+    // Edit-form-only copies — see toISODateInput. Blank (and harmless) on
+    // Report Calendar/MIS rows, whose "due date" is free-text Review Timing.
+    dateAssignedISO: toISODateInput(t.dateAssigned),
+    dueDateISO: toISODateInput(t.dueDate),
     status: t.currentStatus,
     remarks: t.remarks,
     threadId: t.threadId,
@@ -606,6 +627,28 @@ async function demo() {
     JSON.stringify(parseBasicAuthPair(':onlypassword')) === JSON.stringify({ user: '', password: 'onlypassword' }),
     'empty user before the colon is preserved as empty, not dropped'
   );
+
+  // --- toISODateInput: feeds <input type="date"> pre-fill in the Edit form ---
+  assert(toISODateInput('18-Jun-26') === '2026-06-18', 'sheet-format date -> ISO for the date input');
+  assert(toISODateInput('6/21/2026') === '2026-06-21', 'slash date -> ISO for the date input');
+  assert(toISODateInput('2026-07-28') === '2026-07-28', 'already-ISO date is stable');
+  assert(toISODateInput('') === '', 'blank stays blank, never becomes today');
+  assert(toISODateInput('Morning (8:00 AM)') === '', 'non-date text (Review Timing) -> blank, not garbage');
+
+  // toDashboardTask carries both the display copy and the edit-form ISO copy,
+  // without disturbing the raw round-trip field writes still depend on.
+  {
+    const unified: any = {
+      tabName: CONFIG.STAFF_TRACKER_TAB, rowIndex: 5, idNum: '3', taskDescriptionOrName: 'Recon',
+      assignedToName: 'A', emailId: 'a@b.com', taskType: 'Monthly', dateAssigned: '18-Jun-26',
+      dueDate: '21-Jun-26', currentStatus: 'Pending', remarks: '', threadId: '', daysOrOverdueDays: '', isValid: true,
+    };
+    const flat = toDashboardTask(unified);
+    assert(flat.dateAssigned === '18-Jun-26', 'raw dateAssigned untouched, for write round-trips');
+    assert(flat.dateAssignedDisplay === '18-Jun-26', 'display copy formatted DD-Mon-YY');
+    assert(flat.dateAssignedISO === '2026-06-18', 'edit-form copy formatted YYYY-MM-DD');
+    assert(flat.dueDateISO === '2026-06-21', 'due date gets the same ISO treatment');
+  }
 
   console.log('✅ dashboard/logic.ts self-check passed');
 }
