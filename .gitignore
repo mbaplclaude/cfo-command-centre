@@ -3,3 +3,8 @@ dist/
 logs/
 .env
 service-account.json
+
+# Static redesign preview — embeds a snapshot of real Sheet/DB data (names, emails). Never commit.
+dashboard/public/preview.html
+
+dashboard.log

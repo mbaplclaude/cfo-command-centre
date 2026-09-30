@@ -31,7 +31,8 @@ import { UnifiedTask } from '../src/types/index.js';
 import {
   categorize, resolveTab, resolveWriteTab, toDashboardTask, validateNewTask, scalarText, isAllowedTaskType,
   MAX_TEXT_LENGTH, NewTaskInput, BadRequest, readBody, isAllowedOrigin, isOversizedDigestBatch,
-  MAX_STAFF_DIGEST_BATCH, parseBasicAuthPair,
+  MAX_STAFF_DIGEST_BATCH, parseBasicAuthPair, selectBlockingApprovals, formatBlockingApprovalError,
+  BlockingApproval, sourceFingerprint, personStatusCounts,
 } from './logic.js';
 import {
   isValidSessionId, cleanMessage, loadDbContext, loadHistory, buildChatPrompt, askGemini,
@@ -40,6 +41,14 @@ import {
 
 const PORT = Number(process.env.DASHBOARD_PORT || 4000);
 const HERE = __dirname;
+
+// Every runtime .ts this process loads lives under these two roots. Fingerprinted
+// once here, at startup, and again on each /api/health: if they differ, the files
+// on disk have moved on and this process is serving stale API code under a
+// freshly-read index.html. See sourceFingerprint in logic.ts.
+const SOURCE_ROOTS = [HERE, path.join(HERE, '..', 'src')];
+const STARTED_AT = new Date().toISOString();
+const LOADED_FINGERPRINT = sourceFingerprint(SOURCE_ROOTS);
 
 // Every route here can send mail and write the live Sheet with no other auth
 // layer, so once the server binds beyond 127.0.0.1 (Render, any hosted box)
@@ -118,6 +127,52 @@ async function safeQuery(sql: string, params?: any[]): Promise<{ rows: any[]; er
 }
 
 /**
+ * PENDING approval runs that still block row deletion on `tabName`.
+ *
+ * The SQL is deliberately coarse — every PENDING row, with no tab or expiry
+ * filter. `approval_requests` has no tab column (the tab lives inside
+ * reminders_json's nested items), and doing the expiry/tab matching in
+ * selectBlockingApprovals keeps the three cases that matter — same tab, other
+ * tab, lapsed window — unit-testable with no database at all. The set is tiny
+ * in practice: at most one run per hourly pass, each expiring within
+ * APPROVAL_TIMEOUT_HOURS.
+ */
+/**
+ * Prove the database is actually reachable before starting an irreversible write.
+ *
+ * Both halves of the delete route degrade SILENTLY when DATABASE_URL is unset:
+ * DatabaseClient.query returns `{rows: []}` with no error (so the approval guard
+ * sees zero pending runs and waves the delete through), and
+ * DatabaseClient.transaction returns null (so the key repair is skipped). The
+ * route then reported success. The result was a real Sheet row deleted, every
+ * stored task_key below it left one too high, and nothing said so.
+ *
+ * Unconfigured and unreachable are deliberately treated the same: in both cases
+ * this process cannot see the keys it would have to repair, so it must not be
+ * the thing that deletes the row.
+ */
+async function assertDatabaseReachable(): Promise<string | undefined> {
+  if (!db.getPool()) {
+    return 'DATABASE_URL is not configured, so pending approvals cannot be checked and stored row keys cannot be repaired.';
+  }
+  const ping = await safeQuery('SELECT 1');
+  return ping.error;
+}
+
+async function hasBlockingPendingApproval(
+  tabName: string
+): Promise<{ blocking: BlockingApproval[]; error?: string }> {
+  const result = await safeQuery(
+    `SELECT run_id, status, created_at, expires_at, reminders_json
+       FROM approval_requests
+      WHERE status = 'PENDING'
+      ORDER BY created_at DESC`
+  );
+  if (result.error) return { blocking: [], error: result.error };
+  return { blocking: selectBlockingApprovals(result.rows, tabName) };
+}
+
+/**
  * Live sheet read, memoised briefly — one dashboard page load hits tasks,
  * needs-attention and stats, which all derive from the same two API calls.
  */
@@ -160,6 +215,7 @@ async function readSheet(force = false): Promise<{ tasks: UnifiedTask[]; sourceE
       idNum: r.idNum,
       taskDescriptionOrName: r.taskDescription,
       assignedToName: r.assignedTo,
+      personName: r.names,
       emailId: r.emailId,
       taskType: r.taskType,
       dateAssigned: r.dateAssigned,
@@ -180,6 +236,7 @@ async function readSheet(force = false): Promise<{ tasks: UnifiedTask[]; sourceE
         idNum: r.idNum,
         taskDescriptionOrName: r.reportName,
         assignedToName: r.sourceWhoSends,
+        personName: r.name,
         emailId: r.emailId,
         taskType: r.taskType,
         dateAssigned: '',
@@ -238,6 +295,13 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
           label: s.label,
           requiresConfirmation: Boolean(s.requiresConfirmation),
         })),
+        // true = the source files on disk no longer match what this process
+        // loaded at startup, so it must be restarted. null = could not tell
+        // (never reported as "fine"). The page shows a banner either way.
+        codeStale: (() => {
+          try { return sourceFingerprint(SOURCE_ROOTS) !== LOADED_FINGERPRINT; } catch { return null; }
+        })(),
+        serverStartedAt: STARTED_AT,
       },
     }),
   },
@@ -606,6 +670,55 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
     },
   },
 
+  // GET /api/tab-summary?tab= — read-only extras for a board's summary widgets.
+  // Fetched by the page AFTER the board renders, never on its critical path.
+  // Everything else the widgets show (blocking reasons, longest overdue) comes
+  // from /api/tasks + /api/needs-attention, which the page already has.
+  {
+    method: 'GET',
+    pattern: /^\/api\/tab-summary$/,
+    handler: async ({ url }) => {
+      const tabName = resolveTab(url.searchParams.get('tab') || undefined);
+
+      // Staff Tracker reminders are sent by hand, straight away — that tab never
+      // produces an approval run, so there is no queue to ask about. null (not
+      // an empty list) is what tells the page to say so rather than "0 pending".
+      // Other tabs reuse the delete guard's own matcher unchanged: PENDING,
+      // unexpired, matched on the tab inside reminders_json, fail-closed.
+      const approvals = tabName === CONFIG.STAFF_TRACKER_TAB ? null : await hasBlockingPendingApproval(tabName);
+
+      // Last 5 events on this tab across the three logs, newest first. Each arm
+      // is capped at 5 in SQL before the merge, and scoped to this tab's key
+      // prefix — tombstoned "[deleted] …" keys never match it. DISTINCT because
+      // submissions holds the same matched reply more than once (re-evaluation
+      // re-records it: Report Calendar rows 13/17 have 3 and 2 identical rows),
+      // and one event must read as one event.
+      const activity = await safeQuery(
+        `SELECT kind, task_key, at FROM (
+           (SELECT DISTINCT 'sent' AS kind, task_key, sent_at AS at FROM reminder_logs
+             WHERE starts_with(task_key, $1) AND status = 'SENT' AND sent_at IS NOT NULL
+             ORDER BY sent_at DESC LIMIT 5)
+           UNION ALL
+           (SELECT DISTINCT 'reply', task_key, date_received FROM submissions
+             WHERE starts_with(task_key, $1) ORDER BY date_received DESC LIMIT 5)
+           UNION ALL
+           (SELECT 'reviewed', task_key, reviewed_at FROM reviewed_tasks
+             WHERE starts_with(task_key, $1) ORDER BY reviewed_at DESC LIMIT 5)
+         ) e ORDER BY at DESC LIMIT 5`,
+        [`${tabName}|`]
+      );
+
+      return {
+        body: {
+          tab: tabName,
+          approvals: approvals && { runs: approvals.blocking, error: approvals.error },
+          activity: activity.rows.map(r => ({ kind: r.kind, rowIndex: Number(String(r.task_key).split('|')[1]), at: r.at })),
+          dbWarning: activity.error,
+        },
+      };
+    },
+  },
+
   // POST /api/tasks — validate, append to the real Sheet, mirror into Postgres
   {
     method: 'POST',
@@ -725,20 +838,14 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
       }
       if (!ok || errors.rowIndex) return { status: 400, body: { errors } };
 
-      // Same read-only MIS guard as the Task Type editor and every other
-      // dashboard write — this must never be a quieter way around --i-mean-it.
-      const guarded = CONFIG.REPORT_SOURCES.find(s => s.tab === tabName && s.requiresConfirmation);
-      if (guarded) {
-        return {
-          status: 403,
-          body: {
-            error:
-              `"${guarded.label}" is read-only from the dashboard: it still requires --i-mean-it on the command line ` +
-              `before anything may write to it. Edit this row in the Sheet itself.`,
-          },
-        };
-      }
-
+      // NOTE: no requiresConfirmation/--i-mean-it check here, deliberately.
+      // That flag governs the AUTOMATED pipeline (unattended classification and
+      // Sheet write-back, see isGuardedLive in src/agent.ts) and is unchanged.
+      // An interactive edit is a different thing: an operator is looking at the
+      // row, named it explicitly, and is accountable for the change. It is
+      // gated instead by the same guards every other tab's edit is — strict
+      // resolveWriteTab, the isWriteAllowed (spreadsheet, tab) allowlist, and
+      // field validation.
       try {
         // No `names` here, deliberately: the Edit form (like Add a Task) never
         // collects that field, so clean.names is always ''. Omitting the key
@@ -819,6 +926,245 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
       return {
         status: 200,
         body: { ok: true, tabName, rowIndex, reviewed: markReviewed, reviewedAt: result.rows[0]?.reviewed_at || null },
+      };
+    },
+  },
+
+  // POST /api/tasks/delete — permanently remove one Task List row from the
+  // Sheet, then repair every stored key the resulting row-shift invalidated.
+  //
+  // The ORDER below is the whole design:
+  //   1. Every cheap refusal first — tab allowlist, MIS guard, pending
+  //      approvals. Anything that can say "no" must say it BEFORE the
+  //      irreversible step, never after.
+  //   2. TOCTOU re-read. "Delete row 7" and "delete THIS task" stop being the
+  //      same statement the moment anything else touches the Sheet, so the row
+  //      is re-read fresh and must still match what the operator confirmed.
+  //   3. The Sheets deleteDimension call — irreversible. Google Sheets' own
+  //      Version History is the only undo, which the operator has accepted.
+  //   4. DB compensation, in ONE transaction. A half-renumbered key space is
+  //      the exact corruption this route exists to prevent, so a failure here
+  //      is reported loudly with everything needed to finish it by hand.
+  {
+    method: 'POST',
+    pattern: /^\/api\/tasks\/delete$/,
+    handler: async ({ req }) => {
+      const body = await readBody(req);
+
+      // resolveWriteTab, never resolveTab: the loose resolver falls back to
+      // Report Calendar for an unrecognised hint, which on a DELETE would
+      // destroy a real row on a tab nobody named.
+      const tabName = resolveWriteTab(body.tab);
+      if (tabName === null) {
+        return {
+          status: 400,
+          body: { error: `"${scalarText(body.tab) || '(blank)'}" is not a recognised tab — nothing was deleted.` },
+        };
+      }
+
+      const rowIndex = Number(body.rowIndex);
+      if (!Number.isInteger(rowIndex) || rowIndex < 1) {
+        return { status: 400, body: { error: 'rowIndex is required and must be a positive whole number.' } };
+      }
+
+      // NOTE: no requiresConfirmation/--i-mean-it check here, deliberately —
+      // same reasoning as POST /api/tasks/edit. That flag governs the automated
+      // pipeline (isGuardedLive, src/agent.ts) and is untouched. An interactive
+      // delete is gated by the guards below instead: DB reachability, the
+      // tab-level pending-approval guard, the TOCTOU identity re-read, and the
+      // isWriteAllowed (spreadsheet, tab) allowlist inside deleteRow. The two
+      // unintegrated MIS tabs ("M", "Y") and "Monthly " are absent from
+      // CONFIG.REPORT_SOURCES, so resolveWriteTab rejects them before any of this.
+
+      // --- Database reachability, BEFORE the approval guard ---
+      // Without this, an unset/unreachable DATABASE_URL makes the guard below
+      // see zero pending runs and the compensation below silently no-op, while
+      // the route still reports success. Refuse instead.
+      const dbDown = await assertDatabaseReachable();
+      if (dbDown) {
+        return {
+          status: 503,
+          body: { error: `Delete refused — the database is not available: ${dbDown}` },
+        };
+      }
+
+      // --- Pending-approval guard (tab-level; see selectBlockingApprovals) ---
+      const approvals = await hasBlockingPendingApproval(tabName);
+      // Fails CLOSED. If the approvals table cannot be read we cannot prove no
+      // run is live, and deleting on an unverified assumption is precisely the
+      // corruption this guard exists to prevent.
+      if (approvals.error) {
+        return {
+          status: 503,
+          body: { error: `Pending approvals could not be checked, so the delete was refused: ${approvals.error}` },
+        };
+      }
+      if (approvals.blocking.length) {
+        return {
+          status: 409,
+          body: {
+            error: formatBlockingApprovalError(approvals.blocking, tabName),
+            blockedBy: approvals.blocking,
+          },
+        };
+      }
+
+      // --- TOCTOU: the row must still be the row the operator confirmed ---
+      const expectedDescription = scalarText(body.expectedTaskDescription);
+      const expectedEmail = scalarText(body.expectedEmailId);
+      if (expectedDescription === null || expectedEmail === null) {
+        return { status: 400, body: { error: 'expectedTaskDescription and expectedEmailId must be text.' } };
+      }
+      if (!expectedDescription) {
+        return {
+          status: 400,
+          body: { error: 'expectedTaskDescription is required — a delete has to name the row it means, not just its number.' },
+        };
+      }
+
+      // force: a destructive call must never be decided against a 15s-old cache.
+      const { tasks: fresh } = await readSheet(true);
+      const row = fresh.find(t => t.tabName === tabName && t.rowIndex === rowIndex && t.isValid);
+      if (!row) {
+        return {
+          status: 404,
+          body: { error: `Row ${rowIndex} is no longer a live row on "${tabName}" — refresh the tab and try again. Nothing was deleted.` },
+        };
+      }
+
+      const sameDescription = (row.taskDescriptionOrName || '').trim() === expectedDescription;
+      const sameEmail = (row.emailId || '').trim().toLowerCase() === expectedEmail.trim().toLowerCase();
+      if (!sameDescription || !sameEmail) {
+        return {
+          status: 409,
+          body: {
+            error:
+              `Row ${rowIndex} on "${tabName}" has changed since this page was loaded — it now reads ` +
+              `"${row.taskDescriptionOrName}" <${row.emailId}>. Nothing was deleted. Refresh and try again.`,
+          },
+        };
+      }
+
+      // --- Irreversible from here ---
+      try {
+        await sheets.deleteRow(tabName, rowIndex);
+      } catch (err: any) {
+        return {
+          status: 502,
+          body: {
+            error: internalError(
+              `Sheet delete failed (${tabName} row ${rowIndex})`,
+              err,
+              'Could not delete the row from the Sheet — nothing was changed. See the dashboard server log.'
+            ),
+          },
+        };
+      }
+
+      sheetCache = null; // the sheet's shape changed; the cached copy is a lie now
+
+      // --- Compensation: every "<tab>|<row>" below rowIndex is now off by one ---
+      const taskKey = `${tabName}|${rowIndex}`;
+      const prefix = `${tabName}|`;
+      let compensationError: string | undefined;
+
+      try {
+        const applied = await db.transaction(async q => {
+          // Move 1 — tombstone the deleted row's OWN history rather than delete
+          // it: reminder_logs records mail genuinely sent to a real person.
+          // The '[deleted] ' prefix makes the key unmatchable by the
+          // starts_with($tab||'|') every reader uses — so the row shifting up
+          // into slot N can never inherit it — while leaving
+          // split_part(task_key,'|',2)::int parseable, which /api/reminder-logs
+          // casts and would 500 on otherwise.
+          await q(`UPDATE reminder_logs SET task_key = '[deleted] ' || task_key WHERE task_key = $1`, [taskKey]);
+          await q(`UPDATE submissions   SET task_key = '[deleted] ' || task_key WHERE task_key = $1`, [taskKey]);
+          // Dashboard-only bookkeeping and a mirror nothing reads back: no audit
+          // value in either, so these just go.
+          await q(`DELETE FROM reviewed_tasks WHERE task_key = $1`, [taskKey]);
+          await q(`DELETE FROM tasks WHERE tab_name = $1 AND row_index = $2`, [tabName, rowIndex]);
+
+          // Move 2 — shift the survivors up by one. Neither of these two has a
+          // unique constraint on task_key, so one pass cannot collide.
+          // The ~ '^[0-9]+$' guard keeps a single malformed key from aborting
+          // the whole transaction on the ::int cast.
+          await q(
+            `UPDATE reminder_logs
+                SET task_key = $1 || '|' || (split_part(task_key,'|',2)::int - 1)
+              WHERE starts_with(task_key, $2)
+                AND split_part(task_key,'|',2) ~ '^[0-9]+$'
+                AND split_part(task_key,'|',2)::int > $3`,
+            [tabName, prefix, rowIndex]
+          );
+          await q(
+            `UPDATE submissions
+                SET task_key = $1 || '|' || (split_part(task_key,'|',2)::int - 1)
+              WHERE starts_with(task_key, $2)
+                AND split_part(task_key,'|',2) ~ '^[0-9]+$'
+                AND split_part(task_key,'|',2)::int > $3`,
+            [tabName, prefix, rowIndex]
+          );
+
+          // reviewed_tasks.task_key is a PRIMARY KEY, and tasks carries
+          // UNIQUE(tab_name,row_index). Postgres checks both per-row, so a
+          // single renumbering pass can collide mid-statement (9->8 applied
+          // before 8->7) even though the final state is perfectly valid. Park
+          // the survivors far out of range, then land them one lower. Real rows
+          // never approach 1e6 — readTabValues only scans A1:Z500 — so the
+          // parking range cannot collide with live data.
+          await q(
+            `UPDATE reviewed_tasks
+                SET task_key = $1 || '|' || (split_part(task_key,'|',2)::int + 1000000)
+              WHERE starts_with(task_key, $2)
+                AND split_part(task_key,'|',2) ~ '^[0-9]+$'
+                AND split_part(task_key,'|',2)::int > $3`,
+            [tabName, prefix, rowIndex]
+          );
+          await q(
+            `UPDATE reviewed_tasks
+                SET task_key = $1 || '|' || (split_part(task_key,'|',2)::int - 1000001)
+              WHERE starts_with(task_key, $2)
+                AND split_part(task_key,'|',2) ~ '^[0-9]+$'
+                AND split_part(task_key,'|',2)::int > 1000000`,
+            [tabName, prefix]
+          );
+          await q(`UPDATE tasks SET row_index = row_index + 1000000 WHERE tab_name = $1 AND row_index > $2`, [tabName, rowIndex]);
+          await q(`UPDATE tasks SET row_index = row_index - 1000001 WHERE tab_name = $1 AND row_index > 1000000`, [tabName]);
+          return true;
+        });
+
+        // null means transaction() found no pool and ran NOTHING. The
+        // reachability pre-flight above should make this unreachable, but if it
+        // ever happens the repair did not run, and reporting success would be a
+        // lie of exactly the kind this route exists to avoid.
+        if (applied !== true) {
+          compensationError = internalError(
+            `ROW DELETED BUT KEY REPAIR DID NOT RUN — "${tabName}" row ${rowIndex}: the database became unavailable between the pre-flight check and the repair`,
+            new Error('db.transaction() returned null — no pool'),
+            `The Sheet row was deleted, but the stored row keys were NOT renumbered because the database ` +
+              `became unavailable. History for "${tabName}" rows below ${rowIndex} is now attributed one row too high ` +
+              `until it is repaired — see the dashboard server log.`
+          );
+        }
+      } catch (err: any) {
+        compensationError = internalError(
+          `ROW DELETED BUT KEY REPAIR FAILED — "${tabName}" row ${rowIndex}. Every stored task_key on this tab above row ${rowIndex} is now one too high and must be renumbered by hand`,
+          err,
+          `The Sheet row was deleted, but renumbering the stored history FAILED and was rolled back. ` +
+            `Reminder and submission history for "${tabName}" rows below ${rowIndex} is now attributed one row too high ` +
+            `until it is repaired — see the dashboard server log.`
+        );
+      }
+
+      return {
+        status: compensationError ? 500 : 200,
+        body: {
+          ok: !compensationError,
+          tabName,
+          rowIndex,
+          deletedTask: row.taskDescriptionOrName,
+          error: compensationError,
+        },
       };
     },
   },
@@ -906,7 +1252,10 @@ const routes: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
       // Pending load — not on-time/late/overdue noise, and not silently dropped.
       const stats = EmployeeStatsAggregator.calculateStats(all, counts);
       stats.sort((a, b) => b.overdueCount - a.overdueCount || b.totalTasks - a.totalTasks);
-      return { body: { stats, dbWarning: reminders.error } };
+      // `stats` above stays keyed by email (reminder counts are per address);
+      // `people` is the per-person status breakdown for the stacked-bar chart.
+      // Same `all`, no extra read.
+      return { body: { stats, people: personStatusCounts(all), dbWarning: reminders.error } };
     },
   },
 

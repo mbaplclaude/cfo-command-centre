@@ -4,6 +4,9 @@
  * Run the self-check with: npm run check:dashboard
  */
 import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { CONFIG } from '../src/config/index.js';
 import { UnifiedTask } from '../src/types/index.js';
@@ -354,6 +357,190 @@ export function validateNewTask(
   return { ok: Object.keys(errors).length === 0, errors, clean, tab: tabName || '' };
 }
 
+// ---------------------------------------------------------------------------
+// Stale-server detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Content fingerprint of every runtime .ts file under `roots` (test files
+ * excluded — editing a test never changes what the running server does).
+ *
+ * Why this exists: the server loads its TypeScript once, at startup, but serves
+ * index.html fresh from disk on every page load. So after an edit, a server
+ * that was not restarted pairs a NEW page with an OLD API — features look
+ * half-built with no error anywhere. That silently cost two investigations.
+ * server.ts fingerprints at startup and again on each /api/health; a mismatch
+ * means "restart me", and the page says so.
+ */
+export function sourceFingerprint(roots: string[]): string {
+  const hash = crypto.createHash('sha1');
+  const walk = (dir: string) => {
+    const entries = fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+    for (const e of entries) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (p.endsWith('.ts') && !p.endsWith('.test.ts')) {
+        hash.update(p);
+        hash.update(fs.readFileSync(p));
+      }
+    }
+  };
+  for (const root of roots) walk(root);
+  return hash.digest('hex').slice(0, 12);
+}
+
+// ---------------------------------------------------------------------------
+// Pending-approval guard for row deletion (POST /api/tasks/delete)
+// ---------------------------------------------------------------------------
+
+/** One approval_requests row, as the table actually stores it. */
+export interface ApprovalRow {
+  run_id: string;
+  status?: string;
+  created_at?: string | Date;
+  expires_at?: string | Date;
+  /** JSONB: [{recipientEmail, items: [{tabName, rowIndex, taskDescription, ...}]}] */
+  reminders_json?: unknown;
+}
+
+export interface BlockingApproval {
+  runId: string;
+  createdAt?: string | Date;
+  descriptions: string[];
+  /**
+   * True when this row could not be read into the expected shape, so we cannot
+   * prove it does NOT reference the tab. It blocks on the "unverified" ground
+   * rather than on a known item — see selectBlockingApprovals.
+   */
+  unverified: boolean;
+}
+
+/**
+ * Which PENDING approvals still block deletion on `tabName`.
+ *
+ * Deliberately TAB-level, not row-level: any live approval on the tab blocks
+ * every delete on that tab. A delete renumbers every row beneath it, and a
+ * pending run holds `items[{tabName, rowIndex}]` captured BEFORE the shift — so
+ * approving afterwards would log (and reason about) the wrong rows. Blocking
+ * only the exact row being deleted would miss precisely that case.
+ *
+ * `approval_requests` has no tab column; the tab lives inside reminders_json,
+ * so the match digs through the digests' items.
+ *
+ * FAILS CLOSED. Anything that cannot be read into the expected shape blocks,
+ * flagged `unverified`, rather than being skipped. The earlier version treated
+ * "I can't parse this" as "nothing to worry about", which is the one failure
+ * direction that matters: a silent false negative here permits exactly the
+ * delete this guard exists to prevent. Refusing a delete is recoverable in
+ * seconds (approve or discard the run); renumbering every stored key under a
+ * live approval is not.
+ *
+ * Filtering lives here rather than in SQL so the cases that matter — same tab,
+ * other tab, lapsed window, unreadable row — are unit-testable with no
+ * database. The caller's query is deliberately coarse; see
+ * hasBlockingPendingApproval.
+ */
+export function selectBlockingApprovals(
+  rows: ApprovalRow[],
+  tabName: string,
+  now: Date = new Date()
+): BlockingApproval[] {
+  const blocking: BlockingApproval[] = [];
+  const unreadable = (row: ApprovalRow): BlockingApproval => ({
+    runId: row.run_id, createdAt: row.created_at, descriptions: [], unverified: true,
+  });
+
+  for (const row of rows || []) {
+    // Not a fail-open: a non-PENDING run has already been actioned, and
+    // approveAndDispatchRun refuses both APPROVED and EXPIRED outright, so it
+    // provably cannot dispatch.
+    if (row.status !== undefined && row.status !== 'PENDING') continue;
+
+    // expires_at, NOT status alone. Nothing sweeps PENDING -> EXPIRED on a
+    // timer; approveAndDispatchRun only flips it when someone tries to approve.
+    // So a lapsed run still reads PENDING while being permanently un-approvable.
+    const expiresAt = new Date(row.expires_at as any);
+    if (isNaN(expiresAt.getTime())) {
+      blocking.push(unreadable(row)); // window unknown -> cannot prove it is closed
+      continue;
+    }
+    if (expiresAt <= now) continue; // provably lapsed: can never dispatch
+
+    if (!Array.isArray(row.reminders_json)) {
+      blocking.push(unreadable(row)); // contents unknown -> cannot rule this tab out
+      continue;
+    }
+
+    const descriptions: string[] = [];
+    let unverified = false;
+
+    for (const digest of row.reminders_json) {
+      if (!digest || typeof digest !== 'object' || !Array.isArray((digest as any).items)) {
+        unverified = true; // this digest's tab cannot be determined
+        continue;
+      }
+      for (const item of (digest as any).items) {
+        // A real item always carries a string tabName. Anything else is a shape
+        // we do not recognise, so it cannot be ruled out.
+        if (!item || typeof item !== 'object' || typeof item.tabName !== 'string') {
+          unverified = true;
+          continue;
+        }
+        if (item.tabName !== tabName) continue;
+        const desc = String(item.taskDescription ?? '').trim() || `row ${item.rowIndex}`;
+        if (!descriptions.includes(desc)) descriptions.push(desc);
+      }
+    }
+
+    if (descriptions.length || unverified) {
+      blocking.push({ runId: row.run_id, createdAt: row.created_at, descriptions, unverified });
+    }
+  }
+
+  return blocking;
+}
+
+/** Longest list of task names named in one 409 before it is truncated. */
+const MAX_NAMED_BLOCKING_ITEMS = 5;
+
+/** The 409 body for a delete refused by selectBlockingApprovals. */
+export function formatBlockingApprovalError(blocking: BlockingApproval[], tabName: string): string {
+  const runs = blocking
+    .map(b => {
+      const when = new Date(b.createdAt as any);
+      const drafted = isNaN(when.getTime())
+        ? 'drafted earlier'
+        : `drafted ${when.toISOString().replace('T', ' ').slice(0, 16)} UTC`;
+      const shown = b.descriptions.slice(0, MAX_NAMED_BLOCKING_ITEMS).join('; ');
+      const rest = b.descriptions.length - MAX_NAMED_BLOCKING_ITEMS;
+
+      // An unverified run names no task, because the whole point is that its
+      // contents could not be read. Say that plainly instead of implying it is
+      // a normal block the operator can reason about from the description.
+      if (b.unverified) {
+        const partial = b.descriptions.length ? ` — partially readable: ${shown}` : '';
+        return `${b.runId} (${drafted}) — CONTENTS UNREADABLE, this tab could not be ruled out${partial}`;
+      }
+      return `${b.runId} (${drafted}) — ${shown}${rest > 0 ? ` +${rest} more` : ''}`;
+    })
+    .join(' | ');
+
+  const one = blocking.length === 1;
+  const anyUnverified = blocking.some(b => b.unverified);
+
+  return (
+    `Cannot delete from "${tabName}" yet: ${blocking.length} approval run${one ? '' : 's'} ` +
+    `${one ? 'is' : 'are'} still pending on this tab` +
+    (anyUnverified ? `, or could not be verified` : '') + `. ` +
+    `Deleting now would shift every row below it, so ${one ? 'that run' : 'those runs'} would act on ` +
+    `the wrong rows once approved. ` +
+    (anyUnverified
+      ? `Open the run${one ? '' : 's'} named below under Employee Monitor → Approval requests and check ${one ? 'it' : 'them'} by hand, `
+      : `Approve ${one ? 'it' : 'them'} under Employee Monitor → Approval requests, `) +
+    `or discard with "npm run discard:run", then retry the delete. Blocking: ${runs}`
+  );
+}
+
 /**
  * Sheet date text -> "YYYY-MM-DD" for pre-filling an <input type="date">, or ''
  * when the text isn't a date at all (blank, or Report Calendar's free-text
@@ -379,6 +566,11 @@ export function toDashboardTask(t: UnifiedTask) {
     idNum: t.idNum,
     taskDescription: t.taskDescriptionOrName,
     assignedTo: t.assignedToName,
+    // The dedicated person column ("Names" on Staff Tracker, "Name" on Report
+    // Calendar and the MIS registers). Displayed as "Name (Email ID)" instead of
+    // assignedTo, which carries role labels and MIS section headers rather than
+    // people. Kept as a separate field so assignedTo still round-trips on edits.
+    personName: t.personName,
     emailId: t.emailId,
     taskType: t.taskType,
     dateAssigned: t.dateAssigned,
@@ -400,6 +592,46 @@ export function toDashboardTask(t: UnifiedTask) {
     validationIssue: t.validationIssue || '',
     category: categorize(t.currentStatus, t.isValid),
   };
+}
+
+/** One bar of Employee Monitor's per-person stacked chart. */
+export interface PersonStatusCount {
+  name: string;
+  /** True for the bucket of rows whose Name cell is blank — kept, never dropped. */
+  blank: boolean;
+  emails: string[];
+  total: number;
+  counts: Partial<Record<Category, number>>;
+}
+
+/**
+ * Valid rows per person, by status category — Employee Monitor's stacked bars.
+ *
+ * Grouped on personName (the Sheet's own Name column), NOT email, so a shared
+ * inbox like accounts@ splits into the people actually named on its rows.
+ * Deliberately no smarter than trim + collapse spaces + case-fold: stripping
+ * "Sir" or splitting "A / B" would be guessing who is who, so "Vivek" and
+ * "Vivek Sir" stay two bars. A blank Name gets its own bucket rather than
+ * vanishing, so the bars always sum to every valid row.
+ *
+ * Sorted by row count, then overdue load, then name — the page cuts at the top
+ * N, and a tie at that line must land the same way on every load.
+ */
+export function personStatusCounts(tasks: UnifiedTask[]): PersonStatusCount[] {
+  const by = new Map<string, PersonStatusCount>();
+  for (const t of tasks) {
+    if (!t.isValid) continue;
+    const name = (t.personName || '').trim().replace(/\s+/g, ' ');
+    let p = by.get(name.toLowerCase());
+    if (!p) by.set(name.toLowerCase(), (p = { name: name || '(no name on the row)', blank: !name, emails: [], total: 0, counts: {} }));
+    const email = (t.emailId || '').trim().toLowerCase();
+    if (email && !p.emails.includes(email)) p.emails.push(email);
+    const cat = categorize(t.currentStatus);
+    p.counts[cat] = (p.counts[cat] || 0) + 1;
+    p.total++;
+  }
+  return [...by.values()].sort((a, b) =>
+    b.total - a.total || (b.counts.overdue || 0) - (a.counts.overdue || 0) || a.name.localeCompare(b.name));
 }
 
 // ---------------------------------------------------------------------------
@@ -628,6 +860,152 @@ async function demo() {
     'empty user before the colon is preserved as empty, not dropped'
   );
 
+  // --- selectBlockingApprovals: the pending-approval guard on row deletion ---
+  {
+    const STAFF = CONFIG.STAFF_TRACKER_TAB;
+    const REPORT = CONFIG.REPORT_CALENDAR_TAB;
+    const now = new Date('2026-09-22T12:00:00.000Z');
+    const live = '2026-09-22T15:00:00.000Z';   // 3h ahead of `now` — inside the 4h window
+    const lapsed = '2026-09-22T09:00:00.000Z'; // 3h behind `now` — window already closed
+
+    const digest = (tab: string, rowIndex: number, taskDescription: string) => ({
+      recipientEmail: 'a@b.com',
+      items: [{ tabName: tab, rowIndex, taskDescription }],
+    });
+    const run = (over: Partial<ApprovalRow>): ApprovalRow => ({
+      run_id: 'RUN-1', status: 'PENDING', created_at: '2026-09-22T11:00:00.000Z',
+      expires_at: live, reminders_json: [digest(STAFF, 7, 'GST recon')], ...over,
+    });
+
+    // (a) pending + unexpired on the SAME tab -> blocks
+    const sameTab = selectBlockingApprovals([run({})], STAFF, now);
+    assert(sameTab.length === 1, '(a) pending unexpired approval on this tab blocks the delete');
+    assert(sameTab[0].runId === 'RUN-1', '(a) the blocking run is identified by its run id');
+    assert(sameTab[0].descriptions[0] === 'GST recon', '(a) the blocked task is named for the 409 message');
+
+    // (b) pending + unexpired but a DIFFERENT tab -> does not block
+    assert(
+      selectBlockingApprovals([run({})], REPORT, now).length === 0,
+      '(b) a pending approval on another tab never blocks this tab'
+    );
+    assert(
+      selectBlockingApprovals([run({ reminders_json: [digest(REPORT, 3, 'Daily bank position')] })], STAFF, now).length === 0,
+      '(b) matching is by the tabName inside reminders_json, not merely "an approval exists"'
+    );
+
+    // (c) status PENDING but the window has already lapsed -> does not block
+    assert(
+      selectBlockingApprovals([run({ expires_at: lapsed })], STAFF, now).length === 0,
+      '(c) a lapsed PENDING run does not block — nothing sweeps it to EXPIRED, but it can never dispatch'
+    );
+    assert(
+      selectBlockingApprovals([run({ expires_at: now.toISOString() })], STAFF, now).length === 0,
+      '(c) expiry exactly at now is already closed, not still open'
+    );
+
+    // Already-actioned runs never block, whatever their window says.
+    assert(selectBlockingApprovals([run({ status: 'APPROVED' })], STAFF, now).length === 0, 'APPROVED run does not block');
+    assert(selectBlockingApprovals([run({ status: 'EXPIRED' })], STAFF, now).length === 0, 'EXPIRED run does not block');
+
+    // --- FAIL CLOSED: an unreadable row blocks rather than being skipped ---
+    // Each of these once returned "nothing blocking", which silently permitted
+    // the delete. A shape we cannot read cannot be proven harmless.
+    for (const bad of [null, undefined, {}, '[]', [{ items: 'nope' }], [null]]) {
+      const got = selectBlockingApprovals([run({ reminders_json: bad as any })], STAFF, now);
+      const label = `unreadable reminders_json (${JSON.stringify(bad) ?? 'undefined'})`;
+      assert(got.length === 1, `${label} BLOCKS instead of being ignored`);
+      assert(got[0].unverified === true, `${label} is flagged unverified, not reported as a known item`);
+      assert(got[0].runId === 'RUN-1', `${label} still names the run so it can be checked by hand`);
+      assert(got[0].descriptions.length === 0, `${label} claims no task names it could not actually read`);
+    }
+    assert(
+      selectBlockingApprovals([run({ expires_at: 'not-a-date' })], STAFF, now)[0]?.unverified === true,
+      'an unreadable expires_at blocks — the window cannot be proven closed'
+    );
+
+    // ...but fail-closed must not become block-everything: a row that reads
+    // cleanly and belongs to another tab still does not block.
+    assert(selectBlockingApprovals([], STAFF, now).length === 0, 'no approvals at all -> nothing blocks');
+    assert(
+      selectBlockingApprovals([run({ reminders_json: [digest(REPORT, 3, 'Daily bank position')] })], STAFF, now).length === 0,
+      'a well-formed approval for another tab is still not blocking after the inversion'
+    );
+    // A readable digest whose items simply do not mention this tab is verified,
+    // not unverified — an empty items array is a legitimate, readable shape.
+    assert(
+      selectBlockingApprovals([run({ reminders_json: [{ recipientEmail: 'a@b.com', items: [] }] })], STAFF, now).length === 0,
+      'an empty items array is readable and non-blocking, not "unverified"'
+    );
+    // A mixed row: one readable digest for another tab + one unreadable digest.
+    // The unreadable half cannot be ruled out, so the row blocks.
+    const mixed = selectBlockingApprovals(
+      [run({ reminders_json: [digest(REPORT, 3, 'other tab'), { items: 'nope' }] })], STAFF, now
+    );
+    assert(mixed.length === 1 && mixed[0].unverified === true, 'a partially unreadable row blocks on the unreadable part');
+    // An item missing its tabName is an unrecognised shape, so it blocks too.
+    assert(
+      selectBlockingApprovals([run({ reminders_json: [{ items: [{ rowIndex: 4, taskDescription: 'no tab' }] }] })], STAFF, now)[0]?.unverified === true,
+      'an item with no tabName cannot be ruled out'
+    );
+
+    // Several rows on one tab collapse to one entry per run, de-duplicated.
+    const multi = selectBlockingApprovals(
+      [run({ reminders_json: [digest(STAFF, 7, 'GST recon'), digest(STAFF, 9, 'GST recon'), digest(STAFF, 11, 'Bank recon')] })],
+      STAFF, now
+    );
+    assert(multi.length === 1 && multi[0].descriptions.length === 2, 'repeated task names are de-duplicated for the message');
+
+    // An item with no description still names the row, never "undefined".
+    const unnamed = selectBlockingApprovals([run({ reminders_json: [digest(STAFF, 42, '')] })], STAFF, now);
+    assert(unnamed[0].descriptions[0] === 'row 42', 'a blank task description falls back to the row number');
+
+    // --- formatBlockingApprovalError: what the operator actually reads ---
+    const msg = formatBlockingApprovalError(sameTab, STAFF);
+    assert(msg.includes('RUN-1') && msg.includes('GST recon'), 'the 409 names the run and the task');
+    assert(msg.includes('discard:run'), 'the 409 tells the operator how to clear the block');
+    assert(msg.includes('2026-09-22 11:00'), 'the 409 says when the blocking run was drafted');
+    const manyMsg = formatBlockingApprovalError(
+      [{ runId: 'RUN-2', createdAt: '2026-09-22T11:00:00.000Z', descriptions: ['a', 'b', 'c', 'd', 'e', 'f', 'g'], unverified: false }],
+      STAFF
+    );
+    assert(manyMsg.includes('+2 more'), 'a long blocking list is truncated rather than dumped whole');
+
+    // The unverified 409 must say WHY it refused, and must not invent a task name.
+    const unverifiedMsg = formatBlockingApprovalError(
+      selectBlockingApprovals([run({ reminders_json: null as any })], STAFF, now), STAFF
+    );
+    assert(unverifiedMsg.includes('RUN-1'), 'the unverified 409 names the run_id for manual checking');
+    assert(unverifiedMsg.includes('UNREADABLE'), 'the unverified 409 says the contents could not be read');
+    assert(unverifiedMsg.includes('could not be verified'), 'the unverified 409 distinguishes itself from a normal block');
+    assert(unverifiedMsg.includes('discard:run'), 'the unverified 409 still tells the operator how to clear it');
+  }
+
+  // --- sourceFingerprint: the stale-server detector ---
+  {
+    const tmp = fs.mkdtempSync(path.join((await import('node:os')).tmpdir(), 'ccc-fp-'));
+    try {
+      fs.mkdirSync(path.join(tmp, 'sub'));
+      fs.writeFileSync(path.join(tmp, 'a.ts'), 'export const a = 1;');
+      fs.writeFileSync(path.join(tmp, 'sub', 'b.ts'), 'export const b = 2;');
+      const base = sourceFingerprint([tmp]);
+      assert(sourceFingerprint([tmp]) === base, 'fingerprint is stable when nothing changed');
+
+      fs.writeFileSync(path.join(tmp, 'sub', 'b.ts'), 'export const b = 3;');
+      assert(sourceFingerprint([tmp]) !== base, 'editing a nested source file changes the fingerprint (server is stale)');
+      fs.writeFileSync(path.join(tmp, 'sub', 'b.ts'), 'export const b = 2;');
+      assert(sourceFingerprint([tmp]) === base, 'reverting the edit restores the fingerprint');
+
+      fs.writeFileSync(path.join(tmp, 'x.test.ts'), 'test');
+      fs.writeFileSync(path.join(tmp, 'notes.md'), 'notes');
+      assert(sourceFingerprint([tmp]) === base, 'test files and non-.ts files never mark the server stale');
+
+      fs.writeFileSync(path.join(tmp, 'c.ts'), 'export const c = 4;');
+      assert(sourceFingerprint([tmp]) !== base, 'a new source file changes the fingerprint');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
   // --- toISODateInput: feeds <input type="date"> pre-fill in the Edit form ---
   assert(toISODateInput('18-Jun-26') === '2026-06-18', 'sheet-format date -> ISO for the date input');
   assert(toISODateInput('6/21/2026') === '2026-06-21', 'slash date -> ISO for the date input');
@@ -640,14 +1018,46 @@ async function demo() {
   {
     const unified: any = {
       tabName: CONFIG.STAFF_TRACKER_TAB, rowIndex: 5, idNum: '3', taskDescriptionOrName: 'Recon',
-      assignedToName: 'A', emailId: 'a@b.com', taskType: 'Monthly', dateAssigned: '18-Jun-26',
+      assignedToName: 'Accounts team', personName: 'Karnesh',
+      emailId: 'a@b.com', taskType: 'Monthly', dateAssigned: '18-Jun-26',
       dueDate: '21-Jun-26', currentStatus: 'Pending', remarks: '', threadId: '', daysOrOverdueDays: '', isValid: true,
     };
     const flat = toDashboardTask(unified);
+    // personName is carried through separately from assignedTo — the Name column
+    // displays the former, while edits still round-trip the latter.
+    assert(flat.personName === 'Karnesh', 'the Sheet person column is exposed as personName');
+    assert(flat.assignedTo === 'Accounts team', 'the Assigned To / Source value is still carried, unchanged');
     assert(flat.dateAssigned === '18-Jun-26', 'raw dateAssigned untouched, for write round-trips');
     assert(flat.dateAssignedDisplay === '18-Jun-26', 'display copy formatted DD-Mon-YY');
     assert(flat.dateAssignedISO === '2026-06-18', 'edit-form copy formatted YYYY-MM-DD');
     assert(flat.dueDateISO === '2026-06-21', 'due date gets the same ISO treatment');
+  }
+
+  // --- personStatusCounts: Employee Monitor groups by person, not by inbox ---
+  {
+    const row = (personName: string, emailId: string, currentStatus: string, isValid = true): any =>
+      ({ personName, emailId, currentStatus, isValid });
+    const rows = [
+      row('Gourav Ranka', 'accounts@mbapl.com', 'Pending'),
+      row('Gourav Ranka', 'accounts@mbapl.com', 'Overdue'),
+      row('Sonam', 'accounts@mbapl.com', 'Received'),
+      row('  karnesh ', 'banking@ostwal.in', 'Pending'),
+      row('Karnesh', 'Accounts@mbapl.com', 'Pending'),
+      row('Vivek', 'vivek@mbapl.com', 'Pending'),
+      row('Vivek Sir', 'vivek@mbapl.com', 'Pending'),
+      row('', 'x@y.com', 'Pending'),
+      row('Gourav Ranka', 'accounts@mbapl.com', 'Pending', false), // invalid: never counted
+    ];
+    const people = personStatusCounts(rows);
+    const by = (n: string) => people.find(p => p.name.toLowerCase() === n.toLowerCase());
+    assert(by('Gourav Ranka')?.total === 2 && by('Sonam')?.total === 1, 'a shared inbox splits into the people named on its rows');
+    assert(by('Karnesh')?.total === 2 && by('Karnesh')!.emails.length === 2, 'one person across two inboxes is one bar; case/space variants merge');
+    assert(Boolean(by('Vivek')) && Boolean(by('Vivek Sir')), '"Vivek" and "Vivek Sir" stay separate — no guessing who is who');
+    assert(people.some(p => p.blank && p.total === 1), 'a blank Name gets its own bucket, not dropped');
+    assert(people.reduce((n, p) => n + p.total, 0) === 8, 'bars sum to every VALID row, invalid ones excluded');
+    assert(by('Gourav Ranka')?.counts.overdue === 1 && by('Gourav Ranka')?.counts.pending === 1, 'counts are by status category');
+    assert(people[0].name === 'Gourav Ranka', 'sorted by row count, ties broken by overdue load');
+    assert(people[1].name.toLowerCase() === 'karnesh', 'then alphabetically — deterministic at the top-N cut line');
   }
 
   console.log('✅ dashboard/logic.ts self-check passed');

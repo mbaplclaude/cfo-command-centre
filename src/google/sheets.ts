@@ -20,6 +20,28 @@ export function isWriteAllowed(spreadsheetId: string, tabName: string): boolean 
   return CONFIG.REPORT_SOURCES.some(s => s.sheetId === spreadsheetId && s.tab === tabName);
 }
 
+/**
+ * Which WORKBOOK a writable tab lives in — null for anything not writable.
+ *
+ * There are two spreadsheets in play: the primary tracker (Staff Tracker,
+ * Report Calendar) and the separate MIS checklist workbook holding both
+ * MIS_Closing_Report registers. A tab name alone therefore does not identify a
+ * cell; every writer needs the (spreadsheet, tab) pair, and must derive it from
+ * CONFIG rather than assume the primary.
+ *
+ * This lived inline in three writers, one of which (updateEditableFields) had it
+ * as a defaulted parameter callers never passed — so edits silently targeted the
+ * primary workbook and no MIS row could be edited at all. One function now, so
+ * the three cannot drift.
+ *
+ * Self-check: npm run check:write-scope
+ */
+export function resolveSpreadsheetForTab(tabName: string): string | null {
+  if (tabName === CONFIG.STAFF_TRACKER_TAB) return CONFIG.GOOGLE_SHEET_ID;
+  const source = CONFIG.REPORT_SOURCES.find(s => s.tab === tabName);
+  return source ? source.sheetId : null;
+}
+
 export class GoogleSheetsClient {
   private sheetsClient: sheets_v4.Sheets | null = null;
 
@@ -141,6 +163,9 @@ export class GoogleSheetsClient {
         idNum: (row[colIndex.idNum] || '').trim(),
         taskDescriptionOrName: taskDesc,
         assignedToName: assignedTo || (row[colIndex.names] || '').trim(),
+        // The "Names" column (E) verbatim — the real person, kept separate from
+        // the role labels that live in "Assigned To" (C).
+        personName: (row[colIndex.names] || '').trim(),
         emailId: emailId,
         taskType: (row[colIndex.taskType] || '').trim(),
         dateAssigned: dateAssigned,
@@ -242,6 +267,10 @@ export class GoogleSheetsClient {
         idNum: (row[colIndex.idNum] || '').trim(),
         taskDescriptionOrName: reportName,
         assignedToName: sourceWhoSends || (row[colIndex.name] || '').trim(),
+        // The "Name" column (F) verbatim — the real person. On the MIS registers
+        // "Source / Who Sends" (D) holds section headers, not assignees, so this
+        // is the only per-row identity there.
+        personName: (row[colIndex.name] || '').trim(),
         emailId: emailId,
         taskType: (row[colIndex.taskType] || '').trim(),
         dateAssigned: '', // Report calendar may use review timing / schedule
@@ -423,6 +452,75 @@ export class GoogleSheetsClient {
   }
 
   /**
+   * Resolve a tab NAME to its numeric sheetId ("gid").
+   *
+   * Every other writer here addresses a tab by name through an A1 range, but
+   * deleteDimension takes the numeric id instead — the two are unrelated, and
+   * neither is the spreadsheet id. Looked up per call: this runs once per
+   * deletion, so caching it would only add a staleness failure mode (a renamed
+   * or re-created tab) to a destructive operation.
+   */
+  private async getSheetGid(spreadsheetId: string, tabName: string): Promise<number> {
+    const sheets = await this.getClient();
+    const meta = await sheets.spreadsheets.get({
+      spreadsheetId,
+      fields: 'sheets.properties(sheetId,title)',
+    });
+
+    const match = (meta.data.sheets || []).find(s => s.properties?.title === tabName);
+    const gid = match?.properties?.sheetId;
+    // `gid == null`, not `!gid`: the first tab in a workbook legitimately has
+    // sheetId 0, which a falsy check would reject as "not found".
+    if (gid == null) {
+      throw new Error(`Delete rejected: no tab named "${tabName}" exists on sheet ${spreadsheetId}.`);
+    }
+    return gid;
+  }
+
+  /**
+   * Delete one physical row from an approved tab — a real Sheets row deletion,
+   * so every row below it shifts up by one.
+   *
+   * The (spreadsheetId, tab) pair is resolved HERE from CONFIG, never trusted
+   * from the caller, exactly as appendRow does — for a destructive operation
+   * that matters more, not less. isWriteAllowed() then gates the resolved pair.
+   *
+   * CALLER CONTRACT: every stored "<tab>|<rowIndex>" key below `rowIndex` is
+   * stale the moment this returns. dashboard/server.ts's POST /api/tasks/delete
+   * is the only caller and repairs them in one transaction; anything else added
+   * later must do the same or it will silently mis-attribute history.
+   */
+  public async deleteRow(tabName: string, rowIndex: number): Promise<void> {
+    if (!Number.isInteger(rowIndex) || rowIndex < 1) {
+      throw new Error(`Delete rejected: "${rowIndex}" is not a valid 1-based sheet row number.`);
+    }
+
+    const spreadsheetId = resolveSpreadsheetForTab(tabName);
+
+    if (!spreadsheetId || !isWriteAllowed(spreadsheetId, tabName)) {
+      throw new Error(`Delete rejected: tab "${tabName}" is not in the approved write scope.`);
+    }
+
+    const sheets = await this.getClient();
+    const sheetId = await this.getSheetGid(spreadsheetId, tabName);
+
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        requests: [
+          {
+            deleteDimension: {
+              // Half-open and 0-BASED, unlike the 1-based rowIndex every other
+              // method here takes: physical row N is [N-1, N).
+              range: { sheetId, dimension: 'ROWS', startIndex: rowIndex - 1, endIndex: rowIndex },
+            },
+          },
+        ],
+      },
+    });
+  }
+
+  /**
    * Update the user-editable fields of an EXISTING row — the dashboard's Edit
    * form (Task List and Needs Attention). This is the same editable-column set
    * appendRow writes for a brand-new row; Status/Remarks/Days/Thread ID stay off
@@ -432,6 +530,14 @@ export class GoogleSheetsClient {
    * Column-name-matched and RAW, like every other writer in this class. Only
    * fields actually present in `fields` are written, one cell at a time, so a
    * caller can never blank a column it didn't intend to touch.
+   *
+   * The (spreadsheetId, tab) pair is resolved HERE from CONFIG and never taken
+   * from the caller — the same rule appendRow and deleteRow already follow.
+   * This was previously a defaulted `spreadsheetId = CONFIG.GOOGLE_SHEET_ID`
+   * parameter that no caller ever passed, so every edit was aimed at the primary
+   * workbook: an MIS register row could never be edited (it failed the
+   * write-scope check instead of reaching its own spreadsheet). Resolving it in
+   * one place means a caller cannot forget to.
    */
   public async updateEditableFields(
     tabName: string,
@@ -444,11 +550,13 @@ export class GoogleSheetsClient {
       taskType: string;
       dateAssigned: string;
       dueDate: string;
-    }>,
-    spreadsheetId: string = CONFIG.GOOGLE_SHEET_ID
+    }>
   ): Promise<void> {
-    if (!isWriteAllowed(spreadsheetId, tabName)) {
-      throw new Error(`Write rejected: tab "${tabName}" on sheet ${spreadsheetId} is not in the approved write scope.`);
+    const spreadsheetId = resolveSpreadsheetForTab(tabName);
+    const isStaff = tabName === CONFIG.STAFF_TRACKER_TAB;
+
+    if (!spreadsheetId || !isWriteAllowed(spreadsheetId, tabName)) {
+      throw new Error(`Write rejected: tab "${tabName}" is not in the approved write scope.`);
     }
 
     const sheets = await this.getClient();
@@ -457,11 +565,10 @@ export class GoogleSheetsClient {
       throw new Error(`Write rejected: could not locate the header row on "${tabName}".`);
     }
 
-    const isStaff = tabName === CONFIG.STAFF_TRACKER_TAB;
-
     // Same column names appendRow uses for a new row — the report-shaped branch
     // (Report Calendar + both MIS registers) shares one layout, same as everywhere
-    // else this distinction is made.
+    // else this distinction is made. `isStaff` is resolved above, alongside the
+    // spreadsheet it selects.
     const targets: Array<{ header: string; value: string | undefined }> = isStaff
       ? [
           { header: 'taskdescription', value: fields.taskDescription },
@@ -524,8 +631,7 @@ export class GoogleSheetsClient {
     }
   ): Promise<number> {
     const isStaff = tabName === CONFIG.STAFF_TRACKER_TAB;
-    const source = CONFIG.REPORT_SOURCES.find(s => s.tab === tabName);
-    const spreadsheetId = isStaff ? CONFIG.GOOGLE_SHEET_ID : source?.sheetId;
+    const spreadsheetId = resolveSpreadsheetForTab(tabName);
 
     if (!spreadsheetId || !isWriteAllowed(spreadsheetId, tabName)) {
       throw new Error(`Write rejected: tab "${tabName}" is not in the approved write scope.`);
@@ -613,6 +719,30 @@ function demo() {
   // scope. If it ever becomes writable, this assertion is the thing that fails.
   assert(!isWriteAllowed(MIS, 'Monthly '), 'MIS "Monthly " checklist tab is NOT writable');
   assert(!isWriteAllowed(MIS, 'Monthly'), 'nor is it reachable by trimming its trailing space');
+
+  // --- resolveSpreadsheetForTab: every writer picks the tab's OWN workbook ---
+  // The bug this pins: updateEditableFields used to default to the primary
+  // workbook, so an MIS row could never be edited. There are two spreadsheets,
+  // and a tab name alone does not identify a cell.
+  assert(resolveSpreadsheetForTab(CONFIG.STAFF_TRACKER_TAB) === PRIMARY, 'Staff Tracker resolves to the primary workbook');
+  assert(resolveSpreadsheetForTab(CONFIG.REPORT_CALENDAR_TAB) === PRIMARY, 'Report Calendar resolves to the primary workbook');
+  assert(resolveSpreadsheetForTab('MIS_Closing_Report (M)') === MIS, 'MIS monthly register resolves to the MIS workbook, NOT the primary');
+  assert(resolveSpreadsheetForTab('MIS_Closing_Report (Y)') === MIS, 'MIS yearly register resolves to the MIS workbook, NOT the primary');
+  assert(PRIMARY !== MIS, 'the two workbooks are genuinely different ids, so the assertions above mean something');
+
+  // Unwritable tabs resolve to null rather than silently to the primary.
+  assert(resolveSpreadsheetForTab('Monthly ') === null, 'the unintegrated "Monthly " tab resolves to no workbook');
+  assert(resolveSpreadsheetForTab('M') === null, 'the unintegrated MIS "M" tab resolves to no workbook');
+  assert(resolveSpreadsheetForTab('Y') === null, 'the unintegrated MIS "Y" tab resolves to no workbook');
+  assert(resolveSpreadsheetForTab('') === null, 'a blank tab resolves to no workbook');
+  assert(resolveSpreadsheetForTab('4. Report Calendar ') === null, 'a trailing space is a different tab, resolves to nothing');
+
+  // Whatever the resolver returns must itself pass the write-scope allowlist —
+  // the two must never disagree, or a writer would target a pair it may not touch.
+  for (const tab of [CONFIG.STAFF_TRACKER_TAB, ...CONFIG.REPORT_SOURCES.map(s => s.tab)]) {
+    const id = resolveSpreadsheetForTab(tab);
+    assert(id !== null && isWriteAllowed(id, tab), `resolver and allowlist agree for "${tab}"`);
+  }
 
   // Cross-workbook confusion: the right tab name on the wrong sheet must be refused.
   assert(!isWriteAllowed(MIS, CONFIG.STAFF_TRACKER_TAB), 'Staff Tracker name on the MIS sheet is refused');

@@ -54,7 +54,22 @@ export interface UnifiedTask {
   rowIndex: number;
   idNum: string;
   taskDescriptionOrName: string;
+  /**
+   * The Assigned To / Source column verbatim. On Staff Tracker this has
+   * historically carried role labels ("Accounts team", "Finance Controller")
+   * rather than people, and on the MIS registers it carries section headers
+   * ("OTHER ACTIVITIES — MONTH CLOSING"), so it is NOT a reliable identity.
+   * It falls back to personName when blank, which is why it is not simply the
+   * raw cell.
+   */
   assignedToName: string;
+  /**
+   * The dedicated per-row person column, verbatim and with no fallback:
+   * "Names" (col E) on Staff Tracker, "Name" (col F) on Report Calendar and
+   * both MIS registers. This is the real human the row belongs to, and is what
+   * the dashboard displays alongside emailId.
+   */
+  personName: string;
   emailId: string;
   taskType: TaskType;
   dateAssigned: string;

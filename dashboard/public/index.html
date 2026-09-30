@@ -29,6 +29,16 @@
     --wash:         rgba(20,24,31,0.035);
     --shadow-sm: 0 1px 2px rgba(20,24,31,0.05);
     --shadow-md: 0 4px 16px rgba(20,24,31,0.08);
+    /* Kanban cards: a touch more lift than shadow-sm so stacked cards separate. */
+    --shadow-card: 0 1px 2px rgba(20,24,31,0.06), 0 2px 8px rgba(20,24,31,0.06);
+    /* Kanban layers, mixed from the tokens above (no new colours). Light: the
+       column is a well slightly darker than the page, cards sit in it in white.
+       Dark overrides below go the other way — each layer lighter than the one
+       behind it — because a darker well on a dark page reads as a hole. */
+    --kanban-col: color-mix(in srgb, var(--plane), var(--ink) 4%);
+    --kanban-card: var(--surface);
+    /* One page width for the shell, top nav and tab bar, so their edges line up. */
+    --page-max: 1920px;
     --shadow-lg: 0 16px 48px rgba(20,24,31,0.18);
     --radius: 10px;
     --sans: -apple-system, "Segoe UI", system-ui, sans-serif;
@@ -45,6 +55,8 @@
       --critical: #ef5a56; --critical-wash: #2c1614;
       --wash: rgba(255,255,255,0.05);
       --shadow-sm: 0 1px 2px rgba(0,0,0,0.3); --shadow-md: 0 4px 16px rgba(0,0,0,0.4); --shadow-lg: 0 16px 48px rgba(0,0,0,0.55);
+      --shadow-card: 0 1px 2px rgba(0,0,0,0.5), 0 3px 10px rgba(0,0,0,0.45);
+      --kanban-col: var(--surface-2); --kanban-card: color-mix(in srgb, var(--surface-2), var(--ink) 5%);
     }
   }
   :root[data-theme="dark"] {
@@ -58,6 +70,8 @@
     --critical: #ef5a56; --critical-wash: #2c1614;
     --wash: rgba(255,255,255,0.05);
     --shadow-sm: 0 1px 2px rgba(0,0,0,0.3); --shadow-md: 0 4px 16px rgba(0,0,0,0.4); --shadow-lg: 0 16px 48px rgba(0,0,0,0.55);
+      --shadow-card: 0 1px 2px rgba(0,0,0,0.5), 0 3px 10px rgba(0,0,0,0.45);
+      --kanban-col: var(--surface-2); --kanban-card: color-mix(in srgb, var(--surface-2), var(--ink) 5%);
   }
 
   * { box-sizing: border-box; }
@@ -68,7 +82,7 @@
 
   /* ---------- top nav ---------- */
   .ccc-topnav { background: var(--surface); border-bottom: 1px solid var(--hairline); position: sticky; top: 0; z-index: 40; }
-  .ccc-topnav-inner { max-width: 1180px; margin: 0 auto; padding: 12px 24px; display: flex; align-items: center; gap: 20px; }
+  .ccc-topnav-inner { max-width: var(--page-max); margin: 0 auto; padding: 12px 24px; display: flex; align-items: center; gap: 20px; }
   .ccc-brand { display: flex; align-items: center; gap: 9px; font-size: 15px; font-weight: 650; letter-spacing: -0.01em; white-space: nowrap; }
   .ccc-brand .ccc-mark { width: 24px; height: 24px; border-radius: 7px; background: var(--ink); color: var(--plane); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; flex: none; }
   .ccc-search { flex: 1; max-width: 420px; position: relative; }
@@ -80,7 +94,7 @@
   .ccc-theme-toggle:hover { color: var(--ink); border-color: var(--border-strong); }
 
   /* ---------- shell ---------- */
-  .ccc-shell { max-width: 1180px; margin: 0 auto; padding: 24px 24px 64px; }
+  .ccc-shell { max-width: var(--page-max); margin: 0 auto; padding: 24px 24px 64px; }
   .ccc-meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-left: auto; }
   .ccc-chip { font-size: 11.5px; padding: 4px 9px; border-radius: 999px; border: 1px solid var(--hairline); color: var(--ink-2); background: var(--surface-2); display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
   .ccc-chip b { font-weight: 600; color: var(--ink); }
@@ -88,7 +102,7 @@
 
   /* ---------- tab bar (Linear-style animated underline) ---------- */
   .ccc-tabbar-wrap { background: var(--surface); border-bottom: 1px solid var(--hairline); position: sticky; top: 49px; z-index: 39; }
-  .ccc-tabs { max-width: 1180px; margin: 0 auto; padding: 0 24px; display: flex; gap: 4px; overflow-x: auto; }
+  .ccc-tabs { max-width: var(--page-max); margin: 0 auto; padding: 0 24px; display: flex; gap: 4px; overflow-x: auto; }
   .ccc-tab { appearance: none; background: none; border: 0; position: relative; padding: 12px 4px; margin: 0 12px; color: var(--ink-muted); font-size: 13.5px; font-weight: 500; white-space: nowrap; display: inline-flex; align-items: center; gap: 7px; transition: color 0.15s ease; }
   .ccc-tab:first-child { margin-left: 0; }
   .ccc-tab:hover { color: var(--ink); }
@@ -107,12 +121,6 @@
   .ccc-card h2 { font-size: 17px; }
   .ccc-card h3 { font-size: 15.5px; }
   .ccc-card header p { margin: 2px 0 0; color: var(--ink-muted); font-size: 12.5px; }
-
-  /* ---------- summary row (KPI cards) ---------- */
-  .ccc-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 20px; }
-  .ccc-stat { background: var(--surface); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 16px 18px; box-shadow: var(--shadow-sm); }
-  .ccc-stat .ccc-stat-label { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink-muted); font-weight: 550; }
-  .ccc-stat .ccc-stat-value { font-size: 30px; font-weight: 650; margin-top: 8px; letter-spacing: -0.02em; line-height: 1; }
 
   /* ---------- table ---------- */
   .ccc-scroll { overflow-x: auto; overflow-y: auto; max-height: 68vh; border-radius: 10px; border: 1px solid var(--hairline); }
@@ -186,8 +194,6 @@
   .ccc-dd-name { color: var(--ink); font-weight: 550; white-space: nowrap; }
   .ccc-dd-email { color: var(--ink-muted); font-size: 11.5px; margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .ccc-dd-empty { padding: 12px; color: var(--ink-2); font-size: 12.5px; }
-
-  .ccc-checkcell { width: 28px; text-align: center; }
 
   .ccc-tasktype-row { display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap; }
   .ccc-tasktype-select { font: inherit; font-size: 12px; padding: 4px 8px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--ink-2); }
@@ -280,6 +286,100 @@
   .ccc-subtabs { display: flex; gap: 8px; margin-bottom: 16px; }
   .ccc-subtab { appearance: none; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 999px; padding: 6px 14px; font-size: 12.5px; color: var(--ink-2); font-weight: 550; }
   .ccc-subtab[aria-selected="true"] { background: var(--ink); color: var(--plane); border-color: var(--ink); font-weight: 650; }
+
+  /* ---------- Kanban board (task tabs) ---------- */
+  /* Cover cards fill their column; the column width moves within a range and
+     the board is centred, so spare page width becomes outer margin rather than
+     ever-wider cards. Below five minimum-width columns the board scrolls
+     sideways instead of squeezing them.
+     Range measured on every real cover (183 cards): at 260–300px wide a cover
+     settles at ~250px tall (90% within 206–269px); under ~210px titles and the
+     "Name (email)" line start wrapping and it grows. A column is its cover plus
+     45px (28px padding, 15px scrollbar gutter, 2px border), so 255–345px gives
+     210–300px covers: five fit at 1440px, and at 1920px the board centres. */
+  .ccc-board { display: grid; grid-template-columns: repeat(5, minmax(255px, 345px)); gap: 16px; align-items: start; width: max-content; max-width: 100%; margin-inline: auto; overflow-x: auto; padding-bottom: 4px; }
+  .ccc-col { background: var(--kanban-col); border: 1px solid var(--hairline); border-radius: 12px; display: flex; flex-direction: column; min-width: 0; }
+  .ccc-col-head { border-bottom: 1px solid var(--hairline); padding: 12px 14px; display: flex; align-items: center; gap: 8px; }
+  .ccc-col-rail { width: 3px; align-self: stretch; border-radius: 2px; background: var(--col); flex: none; }
+  .ccc-col-head h3 { font-size: 13.5px; }
+  .ccc-col-count { margin-left: auto; font-size: 12px; font-weight: 650; color: var(--ink-2); background: var(--surface); border: 1px solid var(--hairline); border-radius: 999px; padding: 2px 9px; font-variant-numeric: tabular-nums; }
+  /* scrollbar-gutter: every column reserves the same scrollbar room, scrolling
+     or not, so a long column never ends up narrower than its neighbours. */
+  .ccc-col-body { padding: 14px; display: flex; flex-direction: column; gap: 14px; max-height: 72vh; overflow-y: auto; scrollbar-gutter: stable; }
+  .ccc-col-empty { color: var(--ink-muted); font-size: 12.5px; padding: 18px 6px; text-align: center; }
+  /* overflow:hidden is only there so the radius clips the status strip, and it
+     must never clip content: overflow-wrap wraps long remarks, ids and
+     filenames inside the card, and flex-shrink:0 stops the scrolling column
+     from squashing cards to fit — overflow:hidden drops the flex item's
+     automatic min-height, and without this a long column crushed its cards
+     to ~34px and cut their contents off.
+     No forced size: a cover carries the same few lines on every card, so its
+     natural size is already uniform. */
+  .ccc-kcard { position: relative; overflow: hidden; overflow-wrap: anywhere; flex-shrink: 0; display: flex; flex-direction: column; background: var(--kanban-card); border: 0.5px solid var(--border-strong); border-radius: 12px; padding: 16px 16px 16px 20px; box-shadow: var(--shadow-card); font-size: 12.5px; min-width: 0; }
+  /* Status strip: a bar inside the card, clipped by the card's own radius — a
+     border-left on a rounded box leaves a square corner poking out. --col is
+     the card's category colour, the same one its status pill uses. */
+  .ccc-kcard::before { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 4px; background: var(--col); }
+  .ccc-kcard-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  .ccc-kcard-row { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--ink-muted); background: var(--wash); border-radius: 5px; padding: 1px 6px; white-space: nowrap; }
+  .ccc-kcard-title { font-size: 13.5px; font-weight: 600; color: var(--ink); line-height: 1.35; overflow-wrap: anywhere; }
+  .ccc-kcard-meta { display: flex; flex-direction: column; gap: 5px; margin-top: 10px; color: var(--ink-2); overflow-wrap: anywhere; }
+  .ccc-kcard-status { display: flex; flex-wrap: wrap; gap: 8px 12px; margin-top: 12px; }
+  .ccc-kcard-actions { display: flex; flex-wrap: wrap; gap: 6px 10px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--hairline); }
+  .ccc-k { color: var(--ink-muted); }
+  /* ---------- card detail modal ---------- */
+  .ccc-dm-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  .ccc-dm-col { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--ink-2); }
+  .ccc-dm-back { margin-left: auto; }
+  .ccc-dm-grid { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 14px 18px; margin-top: 16px; font-size: 13px; align-items: start; overflow-wrap: anywhere; }
+  .ccc-dm-k { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-muted); font-weight: 650; padding-top: 3px; }
+  @media (max-width: 560px) { .ccc-dm-grid { grid-template-columns: 1fr; gap: 4px; } .ccc-dm-v { margin-bottom: 10px; } }
+
+  /* ---------- status donut (replaces the stat cards) ---------- */
+  /* Donut · legend · 2x2 summary grid. The grid takes the blank space to the
+     right, and drops under the donut when less than ~520px is left. */
+  .ccc-donut-row { display: flex; flex-wrap: wrap; gap: 28px; align-items: center; }
+  .ccc-donut-row > .ccc-donut-wrap { flex: 0 0 220px; }
+  .ccc-donut-row > .ccc-dlegend { flex: 1 1 280px; }
+  .ccc-sumgrid { flex: 1 1 520px; align-self: stretch; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  @media (max-width: 760px) { .ccc-donut-row > .ccc-donut-wrap { flex-basis: 100%; } .ccc-sumgrid { grid-template-columns: 1fr; } }
+  /* Summary panels wear the Kanban tokens: column tint, 0.5px border, 12px corners. */
+  .ccc-mini { background: var(--kanban-col); border: 0.5px solid var(--border-strong); border-radius: 12px; padding: 12px 14px; min-width: 0; overflow-wrap: anywhere; }
+  .ccc-mini h4 { margin: 0 0 8px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-muted); font-weight: 650; }
+  .ccc-mini-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
+  .ccc-mini-list li { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+  .ccc-mini-list li > b { flex: none; font-variant-numeric: tabular-nums; }
+  .ccc-mini-kind { font-weight: 600; }
+  .ccc-mini-time { flex: none; color: var(--ink-muted); font-size: 11.5px; white-space: nowrap; }
+  .ccc-mini-count { font-size: 12.5px; margin-bottom: 6px; }
+  .ccc-mini-more { margin-top: 6px; font-size: 11.5px; color: var(--ink-muted); }
+  .ccc-mini-empty { font-size: 12.5px; color: var(--ink-muted); }
+  .ccc-mini-link { appearance: none; background: none; border: 0; padding: 0; font: inherit; color: var(--accent); text-align: left; cursor: pointer; }
+  .ccc-mini-link:hover { text-decoration: underline; }
+  .ccc-mini-cta { margin-top: 8px; font-size: 12.5px; font-weight: 600; }
+  .ccc-donut-wrap { position: relative; display: flex; justify-content: center; }
+  .ccc-donut { width: 100%; max-width: 220px; height: auto; }
+  .ccc-donut-centre { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; pointer-events: none; }
+  .ccc-donut-total { font-size: 30px; font-weight: 650; letter-spacing: -0.02em; line-height: 1; }
+  .ccc-donut-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-muted); font-weight: 650; margin-top: 5px; }
+  /* Every slice is named and counted here — colour is never the only channel. */
+  .ccc-dlegend { display: flex; flex-direction: column; max-width: 460px; }
+  .ccc-dlegend-item { display: flex; align-items: baseline; gap: 9px; padding: 7px 0; border-bottom: 1px solid var(--hairline); }
+  .ccc-dlegend-item:last-child { border-bottom: 0; }
+  .ccc-swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; align-self: center; }
+  .ccc-dlegend-name { font-size: 12.5px; color: var(--ink-2); }
+  .ccc-dlegend-n { margin-left: auto; font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .ccc-dlegend-pct { font-size: 11.5px; color: var(--ink-muted); font-variant-numeric: tabular-nums; min-width: 34px; text-align: right; }
+
+  /* ---------- per-person stacked bars (Employee Monitor) ---------- */
+  .ccc-pbars { display: flex; flex-direction: column; gap: 3px; }
+  .ccc-pbar-row { display: grid; grid-template-columns: minmax(130px, 220px) 1fr 44px; gap: 12px; align-items: center; padding: 4px 0; }
+  .ccc-pbar-row:hover { background: var(--wash); }
+  .ccc-pbar-name { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 2px surface gap between segments; the rounded ends belong to the bar. */
+  .ccc-pbar { display: flex; gap: 2px; height: 14px; min-width: 6px; border-radius: 4px; overflow: hidden; }
+  .ccc-pbar span { height: 100%; }
+  .ccc-pbar-total { font-size: 12.5px; font-variant-numeric: tabular-nums; color: var(--ink-2); text-align: right; }
 </style>
 </head>
 <body>
@@ -324,6 +424,25 @@ const STATUS_META = {
   DRAFTED:  { icon: '○', colour: 'var(--ink-muted)' },
   SKIPPED:  { icon: '⚑', colour: 'var(--serious)' },
 };
+
+// Kanban columns on the task tabs. One definition feeds the board, the donut and
+// its legend, so what is drawn and what is counted can't drift apart. Placement
+// is by the row's category (i.e. its Status cell) alone — the board never
+// second-guesses Status with any other signal.
+const COLUMNS = [
+  { id: 'todo',    title: 'To Do',       cats: ['overdue'],           colour: 'var(--critical)',  icon: '✕', empty: 'Nothing overdue.' },
+  { id: 'doing',   title: 'In Progress', cats: ['pending'],           colour: 'var(--ink-muted)', icon: '○', empty: 'Nothing pending.' },
+  { id: 'review',  title: 'In Review',   cats: ['unclear'],           colour: 'var(--warning)',   icon: '▲', empty: 'Nothing unclear.' },
+  { id: 'done',    title: 'Done',        cats: ['received', 'early'], colour: 'var(--good)',      icon: '✓', empty: 'Nothing received yet.' },
+  // Rows failing the safety filter — the SAME array as the Needs attention
+  // section under the board. Hatched in the donut: --serious sits ~ΔE 6 from
+  // --critical (To Do), the two touch where the ring wraps, and no slice order
+  // keeps red, amber and orange apart in a five-slice ring.
+  { id: 'blocked', title: 'Blocked',     cats: ['attention'],         colour: 'var(--serious)',   icon: '⚑', empty: 'No blocked rows.', hatch: true },
+];
+
+// Employee Monitor's per-person chart shows this many bars, then one "Other".
+const PERSON_TOP_N = 10;
 
 const TABS = [
   { id: 'staff',     label: 'Staff Tracker',    icon: '📋' },
@@ -374,12 +493,25 @@ const state = {
   // Row edit form (Task List + Needs Attention, all sheet-backed tabs). Only one
   // row's form is ever open at a time, like `expanded` above.
   editingKey: null,      // "tab|rowIndex" of the row currently showing its edit form, or null
+  // Where the open edit form lives: 'modal' (a card's detail modal) or 'audit'
+  // (the Needs attention table — a needs-attention row has Edit in both). Only
+  // the clicked one opens a form: edit submit reads the FIRST
+  // [data-form="edit"] on the page, so two open copies would be ambiguous.
+  editingSurface: 'modal',
+  // "tab|rowIndex" of the board card whose detail modal is open, or null.
+  detailModal: null,
   editFormErrors: {},
   editFormNote: null,
   // "Mark reviewed" — dashboard-only bookkeeping, collapsed by default per tab,
   // same pattern as showExpiredApprovals.
   showReviewed: {},       // tabId -> bool
   reviewedBusy: {},        // "tab|rowIndex" -> true while a mark/unmark POST is in flight
+  // Row deletion. Non-null means the confirm modal is open for that row; a real
+  // Sheet row deletion never happens without an explicit second click here.
+  deleteModal: null,       // {tabName, rowIndex, taskDescription, assignedTo, emailId, busy, error}
+  // Task-row fields this page relies on that an out-of-date server would not
+  // send. Collected on every task load; any entry puts up the stale-server banner.
+  missingFields: new Set(),
   // Manual Staff Tracker send flow (Report Calendar is unaffected — that tab
   // keeps the automated draft/approve/send pipeline exactly as before).
   staffSend: {
@@ -561,6 +693,12 @@ async function load(tab, { refresh = false } = {}) {
         api('/api/directory').catch(() => ({ employees: [] })),
       ]);
       state.data[tab] = { tasks: tasks.tasks, tab: tasks.tab, attention: attention.rows, sheetWarning: tasks.sheetWarning };
+      loadTabSummary(tab); // deliberately not awaited — see loadTabSummary
+      // A server that predates these fields renders them as blanks, not errors
+      // — the Name column fell back to email-only with nothing to say why.
+      for (const f of EXPECTED_TASK_FIELDS) {
+        if ((tasks.tasks || []).some(t => !(f in t))) state.missingFields.add(f);
+      }
       state.data.directory = directory;
     } else if (tab === 'assistant') {
       // No Sheet and no DB read here: the tab renders from state.chat, and the
@@ -758,22 +896,27 @@ function taskView(tabId) {
   const d = state.data[tabId];
   if (!d) return '';
   const needle = state.search.trim().toLowerCase();
-  const tasks = needle
-    ? (d.tasks || []).filter(t =>
-        (t.taskDescription || '').toLowerCase().includes(needle) ||
-        (t.assignedTo || '').toLowerCase().includes(needle) ||
-        (t.emailId || '').toLowerCase().includes(needle)
-      )
-    : (d.tasks || []);
+  const matches = t => !needle ||
+    (t.taskDescription || '').toLowerCase().includes(needle) ||
+    (t.assignedTo || '').toLowerCase().includes(needle) ||
+    // personName too: it is what the Name line displays, so searching
+    // "Karnesh" has to find the row whose Assigned To reads "Accounts team".
+    (t.personName || '').toLowerCase().includes(needle) ||
+    (t.emailId || '').toLowerCase().includes(needle);
+  const tasks = (d.tasks || []).filter(matches);
   // "Mark reviewed" (dashboard-only, reviewed_tasks) splits the same search-
-  // filtered set in two: the main Task List table shows only the active half,
-  // the rest move to the collapsed Reviewed section below.
+  // filtered set in two: the board shows only the active half, the rest move
+  // to the collapsed Reviewed section below.
   const activeTasks = tasks.filter(t => !t.reviewedAt);
   const reviewedTasks = tasks.filter(t => t.reviewedAt);
-  const attention = (d.attention || []).filter(r => r.tabName === d.tab);
-  // Reflects the visible Task List (active rows) — a reviewed row is fully out
-  // of the way, including its contribution to these counts.
-  const counts = activeTasks.reduce((acc, t) => ({ ...acc, [t.category]: (acc[t.category] || 0) + 1 }), {});
+  // ONE array feeds both the Blocked column and the Needs attention section
+  // under the board, filtered by the same search once — the two placements can
+  // never list different rows.
+  const attention = (d.attention || []).filter(r => r.tabName === d.tab).filter(matches);
+  const boardRows = [...activeTasks, ...attention];
+  // Counted from exactly what the board shows (reviewed rows are out of the
+  // way; Blocked is in), so the donut total is always the board's total.
+  const counts = boardRows.reduce((acc, t) => ({ ...acc, [t.category]: (acc[t.category] || 0) + 1 }), {});
   // The MIS registers use Report Calendar's column layout exactly, so they render
   // through the same branch — "isReport" means "report-shaped", not "is the
   // primary Report Calendar tab". isMis carries the differences that are real:
@@ -782,57 +925,27 @@ function taskView(tabId) {
   const isReport = tabId !== 'staff';
   const dirCount = directoryEntries().length;
 
-  const summary = ['overdue', 'pending', 'received', 'early', 'unclear'].map(k => `
-    <div class="ccc-stat">
-      <div class="ccc-stat-label"><span class="ccc-dot" style="background:${CATEGORY_META[k].colour}"></span>${esc(CATEGORY_META[k].label)}</div>
-      <div class="ccc-stat-value">${counts[k] || 0}</div>
-    </div>`).join('');
-
   // Manual send is Staff Tracker only (Report Calendar keeps the automated
   // scheduled pipeline). Only overdue rows are selectable — the same category
   // already computed everywhere else — so a reminder is never drafted for a
   // task that isn't due yet or is already Received.
   const canSelect = !isReport;
   const selectedCount = canSelect ? activeTasks.filter(t => state.staffSend.selected.has(t.rowIndex)).length : 0;
-  const colCount = canSelect ? 8 : 7; // for the edit-form row's colspan below
 
-  const rows = activeTasks.map(t => {
-    const open = state.expanded === `${t.tabName}:${t.rowIndex}`;
-    const selectable = canSelect && t.category === 'overdue';
-    const checked = selectable && state.staffSend.selected.has(t.rowIndex);
-    const editKey = `${t.tabName}|${t.rowIndex}`;
-    const editing = state.editingKey === editKey;
-    const reviewBusy = state.reviewedBusy[editKey];
-    // "Received"/"Received (Early)" only — the date this row's matched
-    // submission actually arrived, from submissions.date_received.
-    const receivedNote = (t.category === 'received' || t.category === 'early') && t.submission?.dateReceivedDisplay
-      ? `<div class="ccc-sub">received ${esc(t.submission.dateReceivedDisplay)}</div>`
-      : '';
-    return `
-      <tr>
-        ${canSelect ? `<td class="ccc-checkcell">${selectable ? `<input type="checkbox" data-staff-select="${t.rowIndex}" ${checked ? 'checked' : ''} />` : ''}</td>` : ''}
-        <td class="ccc-num">${t.rowIndex}${sheetLabel(t.idNum)}</td>
-        <td>
-          <div class="ccc-primary">${esc(t.taskDescription || '(untitled)')}</div>
-          ${taskTypeEditor(t, isMis)}
-          <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:4px;">
-            ${t.remarks || t.threadId || t.submission ? `<button class="ccc-expand" data-expand="${esc(t.tabName)}:${t.rowIndex}">${open ? 'Hide' : 'Show'} agent detail</button>` : ''}
-            ${isMis ? '' : `<button class="ccc-expand" data-edit-toggle="${esc(editKey)}">${editing ? 'Cancel edit' : '✎ Edit'}</button>`}
-            <button class="ccc-expand" data-mark-reviewed="${esc(editKey)}" ${reviewBusy ? 'disabled' : ''}>${reviewBusy ? 'Saving…' : '☑ Mark reviewed'}</button>
-          </div>
-          ${open ? agentDetail(t) : ''}
-          ${!open && t.submission?.attachments?.length ? `<div class="ccc-sub">${attachmentLinks(t.submission.attachments)}</div>` : ''}
-        </td>
-        <td>
-          <div class="ccc-primary">${esc(t.assignedTo || '—')}</div>
-          <div class="ccc-sub">${esc(t.emailId)}</div>
-        </td>
-        <td>${isReport ? esc(t.dueDateDisplay || '—') : `${esc(t.dateAssignedDisplay || '—')}<div class="ccc-sub">due ${esc(t.dueDateDisplay || '—')}</div>`}</td>
-        <td>${badge(t.category)}<div class="ccc-sub">${esc(t.status || 'Pending')}</div>${receivedNote}</td>
-        <td>${mailCell(t.mail)}</td>
-        <td class="ccc-num">${esc(t.days || '—')}</td>
-      </tr>
-      ${editing ? `<tr class="ccc-edit-row"><td colspan="${colCount}">${editForm(t, isReport)}</td></tr>` : ''}`;
+  const board = COLUMNS.map(c => {
+    const inCol = boardRows.filter(t => c.cats.includes(t.category));
+    return `<section class="ccc-col" data-col="${c.id}" style="--col:${c.colour}">
+      <div class="ccc-col-head">
+        <span class="ccc-col-rail"></span>
+        <h3>${c.icon} ${esc(c.title)}</h3>
+        <span class="ccc-col-count">${inCol.length}</span>
+      </div>
+      <div class="ccc-col-body">
+        ${inCol.length
+          ? inCol.map(t => coverCard(t, c, canSelect)).join('')
+          : `<div class="ccc-col-empty">${needle ? 'No matching rows.' : esc(c.empty)}</div>`}
+      </div>
+    </section>`;
   }).join('');
 
   // What this tab's rows are actually subject to. The MIS line is the important
@@ -843,7 +956,7 @@ function taskView(tabId) {
   const scopeNote = canSelect
     ? ' Overdue rows can be selected below to send a reminder by hand — this tab is not part of the hourly scheduled run.'
     : isMis
-      ? ' New reports can be added below. Existing rows are otherwise read-only from here — they are evaluated by hand with <code>npm run agent -- --dry-run --source MIS</code>, and the automated classification/reminder pipeline still needs <code>--i-mean-it</code> before it may act on them for real. These registers are <b>not</b> in the hourly scheduled run.'
+      ? ' Reports can be added, edited and deleted below, the same as Report Calendar. The <b>automated</b> pipeline is unchanged: these registers are evaluated by hand with <code>npm run agent -- --dry-run --source MIS</code> and still need <code>--i-mean-it</code> before it may write to them unattended, and they are <b>not</b> in the hourly scheduled run.'
       : ' This tab is part of the automated hourly reminder run.';
 
   // Monthly / Yearly toggle, built from /api/health (CONFIG.REPORT_SOURCES).
@@ -863,47 +976,48 @@ function taskView(tabId) {
     ${subtabs}
     ${warnBox(d.sheetWarning)}
 
-    <div class="ccc-summary">${summary}</div>
-
     <section class="ccc-card">
-      <header>
+      <header><div>
+        <h3>Status breakdown</h3>
+        <p>One slice per board column, Blocked included — the total here is the total on the board below.</p>
+      </div></header>
+      <div class="ccc-donut-row">
+        ${donut(counts)}${donutLegend(counts)}
+        <div class="ccc-sumgrid" data-tab-summary>${summaryWidgets(tabId)}</div>
+      </div>
+    </section>
+
+    <section class="ccc-card" style="padding:16px">
+      <header style="margin-bottom:12px">
         <div>
-          <h3>${isReport ? 'Report list' : 'Task list'}</h3>
+          <h3>${isReport ? 'Report board' : 'Task board'}</h3>
+          ${!boardRows.length ? `<p>${needle ? `No rows match “${esc(state.search.trim())}”.` : reviewedTasks.length ? 'All rows are marked reviewed — see the Reviewed section below.' : 'No valid rows on this tab yet. Add one below, or check that the service account can read the Sheet.'}</p>` : ''}
         </div>
         <div style="display:flex; gap:8px; align-items:center;">
           ${selectedCount > 0 ? `<button class="ccc-btn" data-staff-preview>✉ Send (${selectedCount})</button>` : ''}
           <button class="ccc-btn ccc-btn-ghost" data-refresh="${tabId}">↻ Refresh Sheet</button>
         </div>
       </header>
-      <div class="ccc-scroll">
-        ${activeTasks.length ? `<table class="ccc-table">
-          <thead><tr>
-            ${canSelect ? `<th></th>` : ''}
-            <th class="ccc-num" title="Physical row number in the Google Sheet">Sheet row</th><th>${isReport ? 'Report' : 'Task'}</th><th>${isReport ? 'Source' : 'Assigned to'}</th>
-            <th>${isReport ? 'Review timing' : 'Assigned / due'}</th><th>Status</th><th>Mail sent</th><th class="ccc-num">${isReport ? 'Overdue' : 'Days'}</th>
-          </tr></thead>
-          <tbody>${rows}</tbody>
-        </table>` : needle ? `<div class="ccc-empty">No rows match “${esc(state.search.trim())}”.</div>` : reviewedTasks.length ? `<div class="ccc-empty">All rows are marked reviewed — see the Reviewed section below.</div>` : `<div class="ccc-empty">No valid rows on this tab yet. Add one below, or check that the service account can read the Sheet.</div>`}
-      </div>
+      <div class="ccc-board" data-board>${board}</div>
     </section>
 
-    ${attention.length ? `<section class="ccc-card">
+    ${attention.length ? `<section class="ccc-card" data-audit>
       <header><div>
         <h3>Needs attention — ${attention.length} row${attention.length === 1 ? '' : 's'} excluded</h3>
-        <p>These rows are never emailed. Fix the flagged field${isMis ? ' in the Sheet' : ' in the Sheet, or use Edit below,'} to bring them into the pipeline.</p>
+        <p>The same rows as the Blocked column, in full. These rows are never emailed. Fix the flagged field in the Sheet, or use Edit below, to bring them into the pipeline.</p>
       </div></header>
       <div class="ccc-scroll"><table class="ccc-table">
         <thead><tr><th class="ccc-num" title="Physical row number in the Google Sheet">Sheet row</th><th>Task</th><th>Email</th><th>Issue</th></tr></thead>
         <tbody>${attention.map(r => {
           const editKey = `${r.tabName}|${r.rowIndex}`;
-          const editing = state.editingKey === editKey;
+          const editing = state.editingKey === editKey && state.editingSurface === 'audit';
           return `<tr>
             <td class="ccc-num">${r.rowIndex}${sheetLabel(r.idNum)}</td>
             <td class="ccc-primary">${esc(r.taskDescription || '(untitled)')}</td>
             <td>${esc(r.emailId || '(missing)')}</td>
             <td>
               ${badge('attention')}<div class="ccc-sub">${esc(r.validationIssue)}</div>
-              ${isMis ? '' : `<div style="margin-top:6px;"><button class="ccc-expand" data-edit-toggle="${esc(editKey)}">${editing ? 'Cancel edit' : '✎ Edit'}</button></div>`}
+              <div style="margin-top:6px;"><button class="ccc-expand" data-edit-toggle="${esc(editKey)}" data-edit-surface="audit">${editing ? 'Cancel edit' : '✎ Edit'}</button></div>
             </td>
           </tr>
           ${editing ? `<tr class="ccc-edit-row"><td colspan="4">${editForm(r, isReport)}</td></tr>` : ''}`;
@@ -936,6 +1050,202 @@ function taskView(tabId) {
     </section>
 
     ${reviewedSection(tabId, reviewedTasks, isReport)}`;
+}
+
+/**
+ * A board card is a COVER: identity and status only, so every card has the same
+ * compact shape. Everything else — Task Type, dates, mail detail, attachments,
+ * agent detail, and the Edit / Mark reviewed / Delete actions — lives in the
+ * detail modal (detailModalHtml) behind "View full detail". Blocked cards use
+ * the same cover and the same modal, with their safety-filter reason as the
+ * status line. The staff-send checkbox stays on the cover so a bulk Send never
+ * needs a modal per row.
+ */
+function coverCard(t, col, canSelect) {
+  const key = `${t.tabName}|${t.rowIndex}`;
+  const selectable = canSelect && t.category === 'overdue';
+  const checked = selectable && state.staffSend.selected.has(t.rowIndex);
+  const statusLine = t.category === 'attention' ? t.validationIssue : (t.status || 'Pending');
+  return `<article class="ccc-kcard" style="--col:${col.colour}">
+    <div class="ccc-kcard-top">
+      ${selectable ? `<input type="checkbox" data-staff-select="${t.rowIndex}" ${checked ? 'checked' : ''} aria-label="Select row ${t.rowIndex} to send a reminder" />` : ''}
+      ${sheetRowChip(t)}
+    </div>
+    <div class="ccc-kcard-title">${esc(t.taskDescription || '(untitled)')}</div>
+    <div class="ccc-kcard-meta">${personCell(t)}</div>
+    <div class="ccc-kcard-status"><div>${badge(t.category)}<div class="ccc-sub">${esc(statusLine)}</div></div></div>
+    <div class="ccc-kcard-actions">
+      <button class="ccc-expand" data-detail-open="${esc(key)}">View full detail →</button>
+    </div>
+  </article>`;
+}
+
+/** "row 19 · #14" — physical Sheet row first; the sheet's own "#" only as a label (see sheetLabel). */
+function sheetRowChip(t) {
+  const label = String(t.idNum ?? '').trim();
+  return `<span class="ccc-kcard-row" title="Physical row number in the Google Sheet${label ? ` — "#${esc(label)}" is the sheet's own manual label` : ''}">row ${t.rowIndex}${label ? ` · #${esc(label)}` : ''}</span>`;
+}
+
+/**
+ * Status donut — plain SVG, no chart library: one arc per board column on a
+ * single circle via stroke-dasharray, 2px surface gap between slices, a native
+ * <title> tooltip on each. Replaces the old numeric stat cards.
+ */
+function donut(counts) {
+  const R = 54, C = 2 * Math.PI * R, GAP = 2;
+  const segs = COLUMNS.map(c => ({ ...c, n: c.cats.reduce((a, k) => a + (counts[k] || 0), 0) })).filter(s => s.n > 0);
+  const total = segs.reduce((a, s) => a + s.n, 0);
+
+  let offset = 0;
+  const arcs = segs.map(s => {
+    const len = (s.n / total) * C;
+    const draw = Math.max(len - GAP, Math.min(len, 1)); // never let the gap swallow a thin slice
+    const arc = `<circle cx="70" cy="70" r="${R}" fill="none" stroke="${s.hatch ? 'url(#ccc-hatch)' : s.colour}" stroke-width="18"
+        stroke-dasharray="${draw.toFixed(2)} ${(C - draw).toFixed(2)}" stroke-dashoffset="${(-offset).toFixed(2)}"
+        transform="rotate(-90 70 70)"><title>${esc(s.title)}: ${s.n} of ${total}</title></circle>`;
+    offset += len;
+    return arc;
+  }).join('');
+
+  return `<div class="ccc-donut-wrap">
+    <svg class="ccc-donut" viewBox="0 0 140 140" role="img" aria-label="Status breakdown: ${COLUMNS.map(c => `${c.title} ${c.cats.reduce((a, k) => a + (counts[k] || 0), 0)}`).join(', ')}">
+      <defs><pattern id="ccc-hatch" patternUnits="userSpaceOnUse" width="5" height="5" patternTransform="rotate(45)">
+        <rect width="5" height="5" fill="var(--surface)" /><rect width="3" height="5" fill="var(--serious)" />
+      </pattern></defs>
+      <circle cx="70" cy="70" r="${R}" fill="none" stroke="var(--hairline)" stroke-width="18" opacity="0.5" />
+      ${arcs}
+    </svg>
+    <div class="ccc-donut-centre"><div class="ccc-donut-total">${total}</div><div class="ccc-donut-label">rows</div></div>
+  </div>`;
+}
+
+/** The numbers beside the donut: every column named, counted and given its share. */
+function donutLegend(counts) {
+  const segs = COLUMNS.map(c => ({ ...c, n: c.cats.reduce((a, k) => a + (counts[k] || 0), 0) }));
+  const total = segs.reduce((a, s) => a + s.n, 0) || 1;
+  return `<div class="ccc-dlegend">${segs.map(s => `
+    <div class="ccc-dlegend-item">
+      <span class="ccc-swatch" style="background:${s.hatch ? `repeating-linear-gradient(45deg, ${s.colour} 0 2px, var(--surface) 2px 3.5px); outline:1px solid ${s.colour}` : s.colour}"></span>
+      <span class="ccc-dlegend-name">${s.icon} ${esc(s.title)} <span class="ccc-k">· ${s.cats.map(k => esc(CATEGORY_META[k].label)).join(' + ')}</span></span>
+      <span class="ccc-dlegend-n">${s.n}</span>
+      <span class="ccc-dlegend-pct">${Math.round((s.n / total) * 100)}%</span>
+    </div>`).join('')}</div>`;
+}
+
+// --- summary widgets (2x2 grid beside the donut) -----------------------------
+
+/**
+ * Pending approvals + recent activity for one board, from GET /api/tab-summary.
+ * Deliberately NOT awaited by load(): the board renders from /api/tasks alone
+ * and this lands a moment later, so it can never delay the board. On arrival
+ * only the widget grid is redrawn — a full render() here could wipe an edit
+ * form the operator is typing into inside the detail modal.
+ */
+function loadTabSummary(tab) {
+  const d = state.data[tab];
+  api(`/api/tab-summary?tab=${encodeURIComponent(d.tab)}`)
+    .catch(err => ({ error: err.message }))
+    .then(s => {
+      if (state.data[tab] !== d) return; // a newer load has replaced this data
+      d.summary = s;
+      const host = document.querySelector('[data-tab-summary]');
+      if (host && state.tab === tab) host.innerHTML = summaryWidgets(tab);
+    });
+}
+
+const WIDGET_CAP = 5;
+const miniPanel = (title, body) => `<section class="ccc-mini"><h4>${esc(title)}</h4>${body}</section>`;
+const miniEmpty = text => `<div class="ccc-mini-empty">${esc(text)}</div>`;
+/** At most WIDGET_CAP items, then a plain "+N more" — no paging. */
+function miniList(items, renderItem) {
+  const more = items.length - WIDGET_CAP;
+  return `<ul class="ccc-mini-list">${items.slice(0, WIDGET_CAP).map(renderItem).join('')}</ul>` +
+    (more > 0 ? `<div class="ccc-mini-more">+${more} more</div>` : '');
+}
+
+/**
+ * Days past due for an Overdue row. Report Calendar and MIS carry the Sheet's
+ * own "Overdue days" column. Staff Tracker's "Days" cell is blank on every
+ * live row, so there it is counted from the due date instead; null when
+ * neither exists (sorted last, shown as "—").
+ */
+function daysOverdue(t, tabId) {
+  if (tabId !== 'staff') {
+    const n = Number(String(t.days ?? '').trim());
+    return String(t.days ?? '').trim() !== '' && Number.isFinite(n) ? n : null;
+  }
+  if (!t.dueDateISO) return null;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return Math.max(0, Math.round((today - new Date(`${t.dueDateISO}T00:00:00`)) / 86_400_000));
+}
+
+const RTF = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+function relTime(v) {
+  const sec = (new Date(v) - Date.now()) / 1000;
+  if (!Number.isFinite(sec)) return '—';
+  for (const [unit, s] of [['year', 31_536_000], ['month', 2_592_000], ['week', 604_800], ['day', 86_400], ['hour', 3_600], ['minute', 60]]) {
+    if (Math.abs(sec) >= s) return RTF.format(Math.round(sec / s), unit);
+  }
+  return 'just now';
+}
+
+/** The four read-only panels. Blocked + Overdue come from data already loaded; the rest from d.summary. */
+function summaryWidgets(tabId) {
+  const d = state.data[tabId];
+  const s = d.summary; // undefined = still loading, {error} = failed
+  const loading = miniEmpty('Loading…');
+  const blocked = (d.attention || []).filter(r => r.tabName === d.tab);
+  // Board rows only — a reviewed row has left the board, and its detail modal with it.
+  const onBoard = (d.tasks || []).filter(t => !t.reviewedAt);
+
+  // 1. Blocking reasons — the Blocked column's own rows, grouped by why.
+  const reasons = Object.entries(blocked.reduce((a, r) => {
+    const k = r.validationIssue || 'Fails the safety filter';
+    return { ...a, [k]: (a[k] || 0) + 1 };
+  }, {})).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const w1 = reasons.length
+    ? miniList(reasons, ([why, n]) => `<li><span>${esc(why)}</span><b>${n}</b></li>`)
+    : miniEmpty('Nothing blocked');
+
+  // 2. Longest overdue — opens the same detail modal the cards use.
+  const overdue = onBoard.filter(t => t.category === 'overdue').map(t => ({ t, days: daysOverdue(t, tabId) }))
+    .sort((a, b) => (b.days ?? -1) - (a.days ?? -1) || a.t.rowIndex - b.t.rowIndex);
+  const w2 = overdue.length
+    ? miniList(overdue, ({ t, days }) => `<li>
+        <button class="ccc-mini-link" data-detail-open="${esc(`${t.tabName}|${t.rowIndex}`)}">${esc(t.taskDescription || '(untitled)')}</button>
+        <b title="${tabId === 'staff' ? 'Days since the due date' : 'The Sheet\'s Overdue days column'}">${days ?? '—'}${days === null ? '' : 'd'}</b></li>`)
+    : miniEmpty('Nothing overdue');
+
+  // 3. Pending approvals. Staff Tracker has no approval step at all, so it gets
+  // an explanation instead of a misleading "0 pending" — and is never queried.
+  let w3;
+  if (tabId === 'staff') w3 = miniEmpty('No approval queue — Staff Tracker reminders go out immediately when you press Send.');
+  else if (!s) w3 = loading;
+  else if (s.error || s.approvals?.error) w3 = miniEmpty(`Couldn't check approvals: ${s.error || s.approvals.error}`);
+  else if (!s.approvals?.runs.length) w3 = miniEmpty('No pending approvals');
+  else {
+    const runs = s.approvals.runs;
+    const names = [...new Set(runs.flatMap(r => r.descriptions))];
+    const unreadable = runs.filter(r => r.unverified).length;
+    w3 = `<div class="ccc-mini-count"><b>${runs.length}</b> pending run${runs.length === 1 ? '' : 's'} on this tab</div>` +
+      (names.length ? miniList(names, n => `<li><span>${esc(n)}</span></li>`) : '') +
+      (unreadable ? `<div class="ccc-mini-more">${unreadable} run${unreadable === 1 ? '' : 's'} could not be read — check by hand</div>` : '') +
+      `<button class="ccc-mini-link ccc-mini-cta" data-goto-approvals>Open Approval requests →</button>`;
+  }
+
+  // 4. Recent activity — last 5 across reminders sent, replies matched, marked reviewed.
+  const KIND = { sent: 'Reminder sent', reply: 'Reply matched', reviewed: 'Marked reviewed' };
+  const nameOf = row => ([...(d.tasks || []), ...blocked].find(t => t.rowIndex === row)?.taskDescription) || `row ${row}`;
+  let w4;
+  if (!s) w4 = loading;
+  else if (s.error || s.dbWarning) w4 = miniEmpty(`Couldn't load activity: ${s.error || s.dbWarning}`);
+  else if (!s.activity?.length) w4 = miniEmpty('No activity recorded on this tab yet');
+  else w4 = miniList(s.activity, e => `<li>
+      <span><b class="ccc-mini-kind">${esc(KIND[e.kind] || e.kind)}</b> · ${esc(nameOf(e.rowIndex))}</span>
+      <span class="ccc-mini-time" title="${esc(fmtDate(e.at))}">${esc(relTime(e.at))}</span></li>`);
+
+  return miniPanel('Blocking reasons', w1) + miniPanel('Longest overdue', w2) +
+    miniPanel('Pending approvals', w3) + miniPanel('Recent activity', w4);
 }
 
 /** Expanded per-row detail: remarks, clickable thread link, attachment links. */
@@ -1125,7 +1435,7 @@ function reviewedSection(tabId, reviewedTasks, isReport) {
     return `<tr>
       <td class="ccc-num">${t.rowIndex}${sheetLabel(t.idNum)}</td>
       <td class="ccc-primary">${esc(t.taskDescription || '(untitled)')}</td>
-      <td><div class="ccc-primary">${esc(t.assignedTo || '—')}</div><div class="ccc-sub">${esc(t.emailId)}</div></td>
+      <td>${personCell(t)}</td>
       <td>${badge(t.category)}<div class="ccc-sub">${esc(t.status || 'Pending')}</div></td>
       <td class="ccc-sub">${fmtDate(t.reviewedAt)}</td>
       <td><button class="ccc-btn ccc-btn-ghost" data-unreview="${esc(key)}" ${busy ? 'disabled' : ''}>${busy ? 'Saving…' : '↩ Unmark'}</button></td>
@@ -1139,11 +1449,41 @@ function reviewedSection(tabId, reviewedTasks, isReport) {
     </div></header>
     ${open ? `<div class="ccc-scroll"><table class="ccc-table">
       <thead><tr>
-        <th class="ccc-num" title="Physical row number in the Google Sheet">Sheet row</th><th>${isReport ? 'Report' : 'Task'}</th><th>${isReport ? 'Source' : 'Assigned to'}</th><th>Status</th><th>Reviewed</th><th></th>
+        <th class="ccc-num" title="Physical row number in the Google Sheet">Sheet row</th><th>${isReport ? 'Report' : 'Task'}</th><th>Name</th><th>Status</th><th>Reviewed</th><th></th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table></div>` : ''}
   </section>`;
+}
+
+/**
+ * "Name (Email ID)" for a row's person cell, from the Sheet's dedicated person
+ * column — "Names" (col E) on Staff Tracker, "Name" (col F) on Report Calendar
+ * and both MIS registers.
+ *
+ * Not `assignedTo`: that column is "Assigned To" / "Source / Who Sends", which
+ * carries role labels on Staff Tracker ("Accounts team", "Finance Controller")
+ * and section headers on the MIS registers ("OTHER ACTIVITIES — MONTH CLOSING").
+ * Those are still shown, de-emphasised underneath, because for reports the
+ * source genuinely is useful context — but they are no longer the row's identity.
+ *
+ * Falls back to assignedTo when the person column is blank, so the cell is never
+ * empty, and omits the parenthesised address when there is no email rather than
+ * rendering "Name ()".
+ */
+function personCell(t) {
+  const name = (t.personName || '').trim();
+  const email = (t.emailId || '').trim();
+  const source = (t.assignedTo || '').trim();
+
+  const primary = name
+    ? (email ? `${esc(name)} (${esc(email)})` : esc(name))
+    : (email ? esc(email) : esc(source || '—'));
+
+  // Only worth a second line when it says something the first line does not.
+  const showSource = source && source !== name && (name || email);
+  return `<div class="ccc-primary">${primary}</div>` +
+    (showSource ? `<div class="ccc-sub">${esc(source)}</div>` : '');
 }
 
 /** Directory entries as {name, email}, newest lookup source for autofill. */
@@ -1320,6 +1660,7 @@ function monitorView() {
 
   return `${pagehead}${subtabs}
     ${warnBox(d.dbWarning)}
+    ${personChart(d.people)}
     <section class="ccc-card">
       <header>
         <div><h3>Per-employee performance</h3><p>Derived from live Sheet statuses across both tabs; reminders sent from the log table.</p></div>
@@ -1340,6 +1681,49 @@ function monitorView() {
     </section>`;
 }
 
+/**
+ * Stacked bar per person (the Sheet's Name column — see personStatusCounts in
+ * logic.ts), segmented by status. The server sends every person already sorted;
+ * the top PERSON_TOP_N get a bar each and everyone else is summed into one
+ * "Other" bar, so the bars always add up to every valid row.
+ */
+const PERSON_STACK = ['overdue', 'unclear', 'pending', 'early', 'received'];
+
+function personChart(people) {
+  const head = `<header>
+      <div><h3>Workload by person</h3><p>Every valid row across all four registers, grouped by the Sheet's Name column — top ${PERSON_TOP_N} by row count, the rest in Other.</p></div>
+      ${people ? `<div class="ccc-legend">${PERSON_STACK.map(k => `<span><span class="ccc-dot" style="background:${CATEGORY_META[k].colour}"></span>${CATEGORY_META[k].icon} ${esc(CATEGORY_META[k].label)} <b>${people.reduce((n, p) => n + (p.counts[k] || 0), 0)}</b></span>`).join('')}</div>` : ''}
+    </header>`;
+  // A server started before this chart existed sends no `people` — say so
+  // instead of drawing an empty chart that looks like "nobody has any rows".
+  if (!people) return `<section class="ccc-card">${head}<div class="ccc-empty">This server predates the per-person chart — restart it (<code>npm run dashboard</code>) to see it.</div></section>`;
+  if (!people.length) return `<section class="ccc-card">${head}<div class="ccc-empty">No valid rows on any register yet.</div></section>`;
+
+  const rest = people.slice(PERSON_TOP_N);
+  const bars = people.slice(0, PERSON_TOP_N);
+  if (rest.length) {
+    const counts = {};
+    for (const p of rest) for (const [k, n] of Object.entries(p.counts)) counts[k] = (counts[k] || 0) + n;
+    bars.push({ name: `Other · ${rest.length} people`, isOther: true, members: rest, total: rest.reduce((n, p) => n + p.total, 0), counts, emails: [] });
+  }
+  const max = Math.max(1, ...bars.map(b => b.total));
+
+  return `<section class="ccc-card">${head}
+    <div class="ccc-pbars" data-person-bars>${bars.map(b => {
+      const who = b.isOther ? b.members.map(p => `${p.name} (${p.total})`).join(', ') : `${b.name} — ${b.emails.join(', ') || 'no email'}`;
+      const mix = PERSON_STACK.filter(k => b.counts[k]).map(k => `${CATEGORY_META[k].label} ${b.counts[k]}`).join(', ');
+      return `<div class="ccc-pbar-row" title="${esc(who)} · ${esc(mix)}">
+        <div class="ccc-pbar-name" ${b.isOther ? 'style="font-style:italic;color:var(--ink-2)"' : ''}>${esc(b.name)}</div>
+        <div class="ccc-pbar" style="width:${((b.total / max) * 100).toFixed(1)}%">
+          ${PERSON_STACK.filter(k => b.counts[k]).map(k =>
+            `<span style="background:${CATEGORY_META[k].colour};flex:${b.counts[k]}" title="${esc(CATEGORY_META[k].label)}: ${b.counts[k]}"></span>`).join('')}
+        </div>
+        <div class="ccc-pbar-total">${b.total}</div>
+      </div>`;
+    }).join('')}</div>
+  </section>`;
+}
+
 // --- render ----------------------------------------------------------------
 function healthBar() {
   const h = state.health;
@@ -1351,6 +1735,37 @@ function healthBar() {
     chip(h.database, 'Database'),
     `<span class="ccc-chip">Approval <b>${h.requireApproval ? 'required' : 'off'}</b></span>`,
   ].join('');
+}
+
+/** Fields /api/tasks rows must carry for this page to render correctly. */
+const EXPECTED_TASK_FIELDS = ['personName', 'reviewedAt', 'dateAssignedISO'];
+
+/**
+ * Loud banner when the server process is running older code than this page.
+ *
+ * index.html is read from disk on every load, but the server's TypeScript is
+ * loaded once at startup — so an un-restarted server pairs a new page with an
+ * old API, and new features look half-built with no error anywhere. Three
+ * independent signals, any one of which is enough:
+ *   - /api/health says codeStale: true (files on disk changed since startup)
+ *   - /api/health has no codeStale at all (server predates this check)
+ *   - task rows are missing fields this page expects
+ */
+function staleServerBanner() {
+  const h = state.health;
+  const reasons = [];
+  if (h && h.codeStale === true) reasons.push('its source files have changed since it started');
+  else if (h && h.codeStale === undefined) reasons.push('it is older than this page\'s version check');
+  else if (h && h.codeStale === null) reasons.push('it could not verify its own code version');
+  if (state.missingFields.size) reasons.push(`task rows arrived without: ${[...state.missingFields].join(', ')}`);
+  if (!reasons.length) return '';
+
+  return `<div class="ccc-warn" role="alert" style="border-color:var(--critical); background:var(--critical-wash); font-size:13px;">
+    <span style="color:var(--critical)">⚠</span>
+    <span><b>The dashboard server is running out-of-date code</b> — ${esc(reasons.join('; '))}.
+    Parts of this page may be missing or wrong until it is restarted: stop it (Ctrl+C) and run <code>npm run dashboard</code>.
+    ${h?.serverStartedAt ? `<span class="ccc-sub">Server started ${esc(fmtDate(h.serverStartedAt))}.</span>` : ''}</span>
+  </div>`;
 }
 
 function render() {
@@ -1367,14 +1782,14 @@ function render() {
   else if (state.tab === 'monitor') body = monitorView();
   else body = taskView(state.tab);
 
-  el('ccc-panel').innerHTML = body;
+  el('ccc-panel').innerHTML = staleServerBanner() + body;
   // The panel was just rebuilt, so the dropdown element is new and hidden.
   // Leaving ddOpen true would desync the state from the DOM.
   ddOpen = false;
   ddIndex = -1;
   ddItems = [];
 
-  renderStaffSendModal();
+  renderModals();
   renderChatWidget();
   restoreChatFocus();
 }
@@ -1386,15 +1801,14 @@ function render() {
  * behind it (there's no reason to, but nothing stops it) doesn't tear it down
  * mid-review. Only visible once previews have been fetched.
  */
-function renderStaffSendModal() {
-  const root = el('ccc-modal-root');
+function staffSendModalHtml() {
   const s = state.staffSend;
 
-  if (!s.previews) { root.innerHTML = ''; return; }
+  if (!s.previews) return '';
 
   if (s.result) {
     const { sentCount, failedCount, results } = s.result;
-    root.innerHTML = `
+    return `
       <div class="ccc-modal-backdrop">
         <div class="ccc-modal">
           <h2>${failedCount === 0 ? '✅ Sent' : '⚠️ Sent with errors'}</h2>
@@ -1407,11 +1821,10 @@ function renderStaffSendModal() {
           <div class="ccc-actions"><button class="ccc-btn" data-staff-close>Done</button></div>
         </div>
       </div>`;
-    return;
   }
 
   const items = s.previews;
-  root.innerHTML = `
+  return `
     <div class="ccc-modal-backdrop">
       <div class="ccc-modal ccc-modal-wide">
         <h2>Review before sending</h2>
@@ -1438,6 +1851,153 @@ function renderStaffSendModal() {
         </div>
       </div>
     </div>`;
+}
+
+/**
+ * Confirm-before-delete. Deliberately a modal with a distinct destructive
+ * button rather than an inline control: the row it names is about to be removed
+ * from the live Sheet, and every row below it renumbered. It restates exactly
+ * which row and which task, so "delete row 7" is never confirmed blind.
+ */
+function deleteModalHtml() {
+  const d = state.deleteModal;
+  if (!d) return '';
+
+  return `
+    <div class="ccc-modal-backdrop" data-dismiss>
+      <div class="ccc-modal" role="alertdialog" aria-modal="true">
+        <h2>Delete this row?</h2>
+        <p class="ccc-note">
+          This removes <b>row ${d.rowIndex}</b> from <b>${esc(d.tabName)}</b> in the Google Sheet itself,
+          and every row below it shifts up by one. There is no undo in this dashboard —
+          restore from the Sheet's own <b>File → Version history</b> if you need it back.
+        </p>
+        <div class="ccc-preview-item">
+          <div class="ccc-primary">${esc(d.taskDescription || '(untitled)')}</div>
+          <div class="ccc-sub">${esc(d.assignedTo || '—')} · ${esc(d.emailId || '(no email)')}</div>
+        </div>
+        ${d.error ? `<div class="ccc-warn"><span style="color:var(--critical)">⚑</span><span>${esc(d.error)}</span></div>` : ''}
+        <div class="ccc-actions">
+          <button class="ccc-btn" data-delete-confirm ${d.busy ? 'disabled' : ''}
+                  style="background:var(--critical); border-color:var(--critical); color:#fff">
+            ${d.busy ? 'Deleting…' : '🗑 Yes, delete'}
+          </button>
+          <button class="ccc-btn ccc-btn-ghost" data-delete-cancel ${d.busy ? 'disabled' : ''}>Cancel</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+/**
+ * Full detail for one board card — everything the cover leaves out, plus the
+ * row's actions. The row is looked up fresh from the tab's loaded data on
+ * every render, so a Task Type change, an edit or a reload shows through
+ * immediately; if the row is no longer on the board (deleted, marked
+ * reviewed), this renders nothing. Every control keeps the data-* hook the
+ * old inline card used, so the existing handlers drive it unchanged.
+ */
+function detailModalHtml() {
+  const key = state.detailModal;
+  if (!key) return '';
+  const d = state.data[state.tab];
+  const t = [...(d?.tasks || []).filter(x => !x.reviewedAt), ...(d?.attention || [])]
+    .find(x => `${x.tabName}|${x.rowIndex}` === key);
+  if (!t) return '';
+
+  const isReport = state.tab !== 'staff';
+  const isMis = state.tab === 'mis';
+  const blocked = t.category === 'attention';
+  const col = COLUMNS.find(c => c.cats.includes(t.category)) || COLUMNS[1];
+  const open = state.expanded === `${t.tabName}:${t.rowIndex}`;
+  const editing = state.editingKey === key && state.editingSurface === 'modal';
+  const reviewBusy = state.reviewedBusy[key];
+  const receivedNote = (t.category === 'received' || t.category === 'early') && t.submission?.dateReceivedDisplay
+    ? `<div class="ccc-sub">received ${esc(t.submission.dateReceivedDisplay)}</div>` : '';
+  const when = isReport
+    ? `${esc(t.dueDateDisplay || '—')}${blocked ? '' : ` <span class="ccc-k">· overdue</span> ${esc(t.days || '—')}`}`
+    : `<span class="ccc-k">assigned</span> ${esc(t.dateAssignedDisplay || '—')} · <span class="ccc-k">due</span> ${esc(t.dueDateDisplay || '—')}${blocked ? '' : ` · <span class="ccc-k">days</span> ${esc(t.days || '—')}`}`;
+  const row = (label, value) => value ? `<div class="ccc-dm-k">${label}</div><div class="ccc-dm-v">${value}</div>` : '';
+
+  return `
+    <div class="ccc-modal-backdrop" data-dismiss>
+      <div class="ccc-modal ccc-modal-wide" role="dialog" aria-modal="true" aria-labelledby="ccc-dm-title">
+        <div class="ccc-dm-head">
+          ${sheetRowChip(t)}
+          <span class="ccc-dm-col"><span class="ccc-pdot" style="background:${col.colour}"></span>${col.icon} ${esc(col.title)}</span>
+          <button class="ccc-btn ccc-btn-ghost ccc-dm-back" data-detail-back>← Back to board</button>
+        </div>
+        <h2 id="ccc-dm-title">${esc(t.taskDescription || '(untitled)')}</h2>
+        <div class="ccc-dm-grid">
+          ${row('Name', personCell(t) + ((t.emailId || '').trim() ? '' : `<div class="ccc-sub">Email ID (missing)</div>`))}
+          ${row('Status', `${badge(t.category)}<div class="ccc-sub">${esc(blocked ? t.validationIssue : (t.status || 'Pending'))}</div>${receivedNote}`)}
+          ${row(isReport ? 'Review timing' : 'Dates', when)}
+          ${blocked ? '' : row('Task type', taskTypeEditor(t, isMis))}
+          ${blocked ? '' : row('Mail sent', mailCell(t.mail))}
+          ${t.submission?.attachments?.length ? row('Attachments', attachmentLinks(t.submission.attachments)) : ''}
+          ${t.remarks || t.threadId || t.submission
+            ? row('Agent detail', `<button class="ccc-expand" data-expand="${esc(t.tabName)}:${t.rowIndex}">${open ? 'Hide' : 'Show'} agent detail</button>${open ? agentDetail(t) : ''}`)
+            : ''}
+        </div>
+        <div class="ccc-actions">
+          <button class="ccc-btn ccc-btn-ghost" data-edit-toggle="${esc(key)}" data-edit-surface="modal">${editing ? 'Cancel edit' : '✎ Edit'}</button>
+          ${blocked ? '' : `
+            <button class="ccc-btn ccc-btn-ghost" data-mark-reviewed="${esc(key)}" ${reviewBusy ? 'disabled' : ''}>${reviewBusy ? 'Saving…' : '☑ Mark reviewed'}</button>
+            <button class="ccc-btn ccc-btn-ghost" data-delete-task="${esc(key)}" style="color:var(--critical); border-color:var(--critical)">🗑 Delete</button>`}
+        </div>
+        ${editing ? editForm(t, isReport) : ''}
+      </div>
+    </div>`;
+}
+
+/** Where the open detail modal was launched from — a board card or a summary widget. */
+let detailOpenedFrom = '[data-board]';
+
+/** Close the detail modal, and anything that only lived inside it. Returns the row key it was showing. */
+function closeDetailModal() {
+  const key = state.detailModal;
+  state.detailModal = null;
+  state.expanded = null;
+  if (state.editingSurface === 'modal') {
+    state.editingKey = null;
+    state.editFormErrors = {};
+    state.editFormNote = null;
+  }
+  return key;
+}
+
+/**
+ * Esc and a backdrop click close the TOP modal only, one level at a time: a
+ * delete-confirm opened from the detail modal goes back to that detail modal;
+ * the detail modal goes back to the board. Dismissing the delete-confirm is
+ * always Cancel — it can never delete — and it waits while a delete is in
+ * flight. The staff-send review is deliberately NOT dismissible this way: it
+ * holds hand-edited email text an accidental Esc would throw away; its own
+ * Cancel/Done buttons stay the way out.
+ */
+function dismissTopModal() {
+  if (state.deleteModal) {
+    if (state.deleteModal.busy) return;
+    state.deleteModal = null;
+    render();
+  } else if (state.detailModal) {
+    const key = closeDetailModal();
+    render();
+    // Hand focus back to the card the modal was opened from.
+    document.querySelector(`${detailOpenedFrom} [data-detail-open="${CSS.escape(key)}"]`)?.focus();
+  }
+}
+
+/**
+ * One owner for #ccc-modal-root. Every modal renders into the same element, so
+ * exactly one is chosen here rather than each writing the root and wiping the
+ * others (the Staff Send / delete collision). Delete takes precedence — it is
+ * the one holding a destructive confirmation the operator is mid-way through
+ * answering. A delete started from the detail modal REPLACES it on screen while
+ * state.detailModal stays set, so Cancel lands back on the detail and a
+ * successful delete clears both.
+ */
+function renderModals() {
+  el('ccc-modal-root').innerHTML = deleteModalHtml() || staffSendModalHtml() || detailModalHtml();
 }
 
 // --- Directory autofill ----------------------------------------------------
@@ -1652,14 +2212,57 @@ document.addEventListener('keydown', ev => {
   }
 });
 
+// --- modal dismissal (Esc / backdrop) ----------------------------------------
+// Where the press began: a click counts as a backdrop click only if the press
+// started on the backdrop too (see the [data-dismiss] branch below).
+let pressStartedOnBackdrop = false;
+document.addEventListener('mousedown', ev => {
+  pressStartedOnBackdrop = Boolean(ev.target.matches?.('[data-dismiss]'));
+});
+document.addEventListener('keydown', ev => {
+  if (ev.key !== 'Escape' || !(state.deleteModal || state.detailModal)) return;
+  ev.preventDefault();
+  dismissTopModal();
+});
+
 // --- events ----------------------------------------------------------------
 document.addEventListener('click', async ev => {
   const t = ev.target.closest(
     '[data-tab],[data-subtab],[data-mis-tab],[data-expand],[data-refresh],[data-submit],[data-approve],' +
       '[data-staff-preview],[data-staff-confirm],[data-staff-cancel],[data-staff-close],[data-toggle-expired],' +
-      '[data-edit-toggle],[data-edit-cancel],[data-toggle-reviewed],[data-mark-reviewed],[data-unreview]'
+      '[data-edit-toggle],[data-edit-cancel],[data-toggle-reviewed],[data-mark-reviewed],[data-unreview],' +
+      '[data-delete-task],[data-delete-confirm],[data-delete-cancel],' +
+      '[data-detail-open],[data-detail-back],[data-dismiss],[data-goto-approvals]'
   );
   if (!t) return;
+
+  // Backdrop click: only a click that both started AND ended on the backdrop
+  // itself. A click inside the modal also bubbles up to here (the modal sits
+  // inside its backdrop), and a drag that begins in an edit field and releases
+  // outside must not throw the form away.
+  if (t.dataset.dismiss !== undefined) {
+    if (ev.target === t && pressStartedOnBackdrop) dismissTopModal();
+    return;
+  }
+
+  if (t.dataset.gotoApprovals !== undefined) {
+    closeDetailModal();
+    state.tab = 'monitor'; state.monitorView = 'approvals'; state.formErrors = {}; state.formNote = null;
+    return state.data.monitor ? render() : load('monitor');
+  }
+
+  if (t.dataset.detailOpen !== undefined) {
+    closeDetailModal(); // start clean: no agent detail or edit form left over from another row
+    // The same row can be opened from its card or from a summary widget; focus
+    // goes back to whichever was clicked when the modal closes.
+    detailOpenedFrom = t.closest('[data-tab-summary]') ? '[data-tab-summary]' : '[data-board]';
+    state.detailModal = t.dataset.detailOpen;
+    render();
+    document.querySelector('[data-detail-back]')?.focus();
+    return;
+  }
+
+  if (t.dataset.detailBack !== undefined) return dismissTopModal();
 
   // Switching register re-reads that tab. The server memoises the Sheet for 15s,
   // so flipping back and forth costs nothing.
@@ -1682,7 +2285,10 @@ document.addEventListener('click', async ev => {
 
   if (t.dataset.editToggle !== undefined) {
     const key = t.dataset.editToggle;
-    state.editingKey = state.editingKey === key ? null : key;
+    // Same row + same place = close; anywhere else = open it there instead.
+    const surface = t.dataset.editSurface || 'modal';
+    state.editingKey = state.editingKey === key && state.editingSurface === surface ? null : key;
+    state.editingSurface = surface;
     state.editFormErrors = {};
     state.editFormNote = null;
     return render();
@@ -1693,6 +2299,67 @@ document.addEventListener('click', async ev => {
     state.editFormErrors = {};
     state.editFormNote = null;
     return render();
+  }
+
+  // Opens the confirm modal only — this click never deletes anything.
+  if (t.dataset.deleteTask !== undefined) {
+    const [tabName, rowIndexStr] = t.dataset.deleteTask.split('|');
+    const rowIndex = Number(rowIndexStr);
+    const task = (state.data[state.tab]?.tasks || []).find(x => x.tabName === tabName && x.rowIndex === rowIndex);
+    if (!task) return;
+    state.deleteModal = {
+      tabName, rowIndex,
+      taskDescription: task.taskDescription,
+      assignedTo: task.assignedTo,
+      emailId: task.emailId,
+      busy: false, error: null,
+    };
+    return render();
+  }
+
+  if (t.dataset.deleteCancel !== undefined) {
+    state.deleteModal = null;
+    return render();
+  }
+
+  if (t.dataset.deleteConfirm !== undefined) {
+    const d = state.deleteModal;
+    if (!d || d.busy) return;
+    d.busy = true;
+    d.error = null;
+    render();
+    try {
+      // The description/email travel with the request so the server can prove
+      // the row it is about to delete is still the row shown in this modal.
+      const res = await api('/api/tasks/delete', {
+        method: 'POST',
+        body: JSON.stringify({
+          tab: d.tabName,
+          rowIndex: d.rowIndex,
+          expectedTaskDescription: d.taskDescription,
+          expectedEmailId: d.emailId,
+        }),
+      });
+      state.deleteModal = null;
+      // The row is gone, so the detail modal it may have been opened from goes too.
+      closeDetailModal();
+      // Row numbers just shifted, and all of these are keyed by row index.
+      state.staffSend.selected = new Set();
+      state.expanded = null;
+      state.editingKey = null;
+      state.reviewedBusy = {};
+      state.formNote = res.error
+        ? { ok: false, text: res.error }
+        : { ok: true, text: `Deleted row ${d.rowIndex} from ${d.tabName}.` };
+      await load(state.tab, { refresh: true });
+    } catch (err) {
+      // 409 (pending approval or a changed row), 403, 503 and 500 all land here
+      // and are shown in the modal the operator is already looking at.
+      d.busy = false;
+      d.error = err.body?.error || err.message;
+      render();
+    }
+    return;
   }
 
   if (t.dataset.markReviewed !== undefined || t.dataset.unreview !== undefined) {
@@ -1707,6 +2374,8 @@ document.addEventListener('click', async ev => {
         body: JSON.stringify({ tab: tabName, rowIndex: Number(rowIndexStr), reviewed }),
       });
       delete state.reviewedBusy[key];
+      // A reviewed row leaves the board, so its detail modal closes with it.
+      if (state.detailModal === key) closeDetailModal();
       await load(state.tab); // re-renders with the row moved to/from Reviewed
     } catch (err) {
       console.error('Mark reviewed failed:', err.message);
