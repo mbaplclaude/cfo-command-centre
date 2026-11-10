@@ -40,7 +40,7 @@ Copy `.env.example` to `.env` and configure your credentials:
 
 ```env
 # Google Sheets Configuration
-GOOGLE_SHEET_ID=1blcm4q94bmszP7t-ffLKwOwxUqsQVhHzRJwUOASRFTYIWD
+GOOGLE_SHEET_ID=GOOGLE_SHEET_ID=
 GOOGLE_SERVICE_ACCOUNT_KEY_PATH=./service-account.json
 
 # Gmail OAuth2 Configuration (Personal Gmail: mbaplclaudereply@gmail.com)
@@ -58,9 +58,9 @@ ANTHROPIC_API_KEY=your-anthropic-api-key
 # Operational Settings
 REQUIRE_APPROVAL=true
 APPROVAL_TIMEOUT_HOURS=4
-OPERATOR_EMAIL=mbaplclaudereply@gmail.com
-REPLY_FORWARD_EMAIL=mbaplclaudereply@gmail.com
-OWN_SENDER_EMAILS=mbaplclaudereply@gmail.com
+OPERATOR_EMAIL=OPERATOR_EMAIL
+REPLY_FORWARD_EMAIL=REPLY_FORWARD_EMAIL
+OWN_SENDER_EMAILS=OWN_SENDER_EMAILS
 ```
 
 ---
